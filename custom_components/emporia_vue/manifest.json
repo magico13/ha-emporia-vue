@@ -1,0 +1,16 @@
+{
+  "domain": "emporia_vue",
+  "name": "Emporia Vue",
+  "config_flow": true,
+  "documentation": "https://www.home-assistant.io/integrations/emporia_vue",
+  "requirements": [
+    "pyemvue==0.9.3"
+  ],
+  "ssdp": [],
+  "zeroconf": [],
+  "homekit": {},
+  "dependencies": [],
+  "codeowners": [
+    "@magico13"
+  ]
+}
