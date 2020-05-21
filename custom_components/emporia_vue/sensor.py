@@ -17,8 +17,9 @@ async def async_setup_entry(hass, config_entry, add_entities):
     # Add a sensor for each device channel
     devices = []
     for device in vue_devices:
+        device = vue.populate_device_properties(device)
         for channel in device.channels:
-            devices.append(CurrentVuePowerSensor(vue, channel))
+            devices.append(CurrentVuePowerSensor(vue, device, channel))
 
     add_entities(devices)
 
@@ -26,16 +27,17 @@ async def async_setup_entry(hass, config_entry, add_entities):
 class CurrentVuePowerSensor(Entity):
     """Representation of a Vue Sensor's current power."""
 
-    def __init__(self, vue, channel):
+    def __init__(self, vue, device, channel):
         """Initialize the sensor."""
         self._state = None
         self._vue = vue
+        self._device = device
         self._channel = channel
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f'Power {self._channel.device_gid} {self._channel.channel_num}'
+        return f'Power {self._device.device_name} {self._channel.channel_num}'
 
     @property
     def state(self):
