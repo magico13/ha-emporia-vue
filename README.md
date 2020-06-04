@@ -2,6 +2,8 @@
 
 Reads data from the Emporia Vue energy monitor. Creates a sensor for each device channel showing average usage over each minute.
 
+Note: This project is not associated with or endorsed by Emporia Energy. Also, I do not have the expansion module or any other Emporia devices so I cannot guarantee support for those (PRs welcome!).
+
 ![ha_example](images/ha_example.png)
 
 ## Installation with HACS
