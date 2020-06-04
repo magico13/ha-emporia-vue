@@ -1,0 +1,5 @@
+{
+    "name": "Emporia Vue Integration",
+    "domains": ["sensor"],
+    "iot_class": "Cloud Polling"
+}
