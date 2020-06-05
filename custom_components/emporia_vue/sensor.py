@@ -33,11 +33,13 @@ class CurrentVuePowerSensor(Entity):
         self._vue = vue
         self._device = device
         self._channel = channel
+        dName = channel.name or device.device_name
+        self._name = f'Power {dName} {self._channel.channel_num}'
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f'Power {self._device.device_name} {self._channel.channel_num}'
+        return self._name
 
     @property
     def state(self):

@@ -2,9 +2,9 @@
   "domain": "emporia_vue",
   "name": "Emporia Vue",
   "config_flow": true,
-  "documentation": "https://www.home-assistant.io/integrations/emporia_vue",
+  "documentation": "https://github.com/magico13/ha-emporia-vue",
   "requirements": [
-    "pyemvue==0.9.6"
+    "pyemvue==0.9.7"
   ],
   "ssdp": [],
   "zeroconf": [],
