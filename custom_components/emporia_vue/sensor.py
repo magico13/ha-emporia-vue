@@ -19,7 +19,9 @@ async def async_setup_entry(hass, config_entry, add_entities):
     for device in vue_devices:
         device = vue.populate_device_properties(device)
         for channel in device.channels:
-            devices.append(CurrentVuePowerSensor(vue, device, channel))
+            devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.MINUTE.value))
+            devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.DAY.value))
+            devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.MONTH.value))
 
     add_entities(devices)
 
@@ -27,14 +29,16 @@ async def async_setup_entry(hass, config_entry, add_entities):
 class CurrentVuePowerSensor(Entity):
     """Representation of a Vue Sensor's current power."""
 
-    def __init__(self, vue, device, channel):
+    def __init__(self, vue, device, channel, scale):
         """Initialize the sensor."""
         self._state = None
         self._vue = vue
         self._device = device
         self._channel = channel
         dName = channel.name or device.device_name
-        self._name = f'Power {dName} {self._channel.channel_num}'
+        self._name = f'Power {dName} {self._channel.channel_num} {scale}'
+        self._scale = scale
+        self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
 
     @property
     def name(self):
@@ -49,7 +53,10 @@ class CurrentVuePowerSensor(Entity):
     @property
     def unit_of_measurement(self):
         """Return the unit of measurement."""
-        return POWER_WATT
+        if self._iskwh:
+            return ENERGY_KILO_WATT_HOUR
+        else:
+            return POWER_WATT
     
     @property
     def device_class(self):
@@ -59,7 +66,10 @@ class CurrentVuePowerSensor(Entity):
     @property
     def unique_id(self):
         """Unique ID for the sensor"""
-        return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
+        if self._scale == Scale.MINUTE.value:
+            return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
+        else:
+            return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
 
     def update(self):
         """Fetch new state data for the sensor.
@@ -70,11 +80,14 @@ class CurrentVuePowerSensor(Entity):
         num = self._channel.channel_num
 
         # TODO: each sensor shouldn't do this separately
-        channels = self._vue.get_recent_usage(scale=Scale.MINUTE.value)
+        channels = self._vue.get_recent_usage(scale=self._scale)
         if channels:
             for channel in channels:
                 if channel.device_gid == gid and channel.channel_num == num:
-                    self._state = round(channel.usage)
+                    usage = round(channel.usage)
+                    if self._iskwh:
+                        usage /= 1000.0
+                    self._state = usage
                     return
 
         self._state = None

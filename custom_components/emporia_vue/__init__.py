@@ -55,7 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
     password = entry_data[CONF_PASSWORD]
-    _LOGGER.info(entry_data)
+    #_LOGGER.info(entry_data)
     vue = PyEmVue()
     try:
         result = vue.login(username=email, password=password)
