@@ -12,7 +12,11 @@ from pyemvue import PyEmVue
 
 _LOGGER = logging.getLogger(__name__)
 
-DATA_SCHEMA = vol.Schema({CONF_EMAIL: str, CONF_PASSWORD: str})
+DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_EMAIL, default="Email"): str, 
+        vol.Required(CONF_PASSWORD, default="Password"): str
+    })
 
 
 class VueHub:

@@ -11,9 +11,9 @@
         "step": {
             "user": {
                 "data": {
-                    "host": "Host"
-                },
-                "title": "Connect to the device"
+                    "email": "Email",
+                    "password": "Password"
+                }
             }
         },
         "title": "Emporia Vue"

@@ -4,7 +4,7 @@
   "config_flow": true,
   "documentation": "https://github.com/magico13/ha-emporia-vue",
   "requirements": [
-    "pyemvue==0.10.1"
+    "pyemvue==0.11.0"
   ],
   "ssdp": [],
   "zeroconf": [],

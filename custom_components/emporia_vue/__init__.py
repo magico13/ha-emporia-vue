@@ -61,7 +61,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         result = vue.login(username=email, password=password)
         if not result:
             raise Exception("Could not authenticate with Emporia API")
-            return False
     except Exception:
         _LOGGER.error("Could not authenticate with Emporia API")
         return False
@@ -70,9 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     #discovered_devices = vue.get_devices()
 
     hass.data[DOMAIN][entry.entry_id] = {
-        VUE_DATA: vue,
-        #VUE_DEVICES_DATA: VueDeviceData(),
-        #VUE_DISCOVERED_DEVICES_DATA: discovered_devices,
+        VUE_DATA: vue
     }
 
     for component in PLATFORMS:
