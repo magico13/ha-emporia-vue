@@ -1,6 +1,6 @@
 """Config flow for Emporia Vue integration."""
 import logging
-
+import asyncio
 import voluptuous as vol
 
 from homeassistant import config_entries, core, exceptions
@@ -30,7 +30,9 @@ class VueHub:
 
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
-        return self.vue.login(username=username, password=password)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, self.vue.login, username, password)
+        return result
 
 
 async def validate_input(hass: core.HomeAssistant, data):

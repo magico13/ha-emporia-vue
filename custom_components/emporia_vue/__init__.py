@@ -58,7 +58,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     #_LOGGER.info(entry_data)
     vue = PyEmVue()
     try:
-        result = vue.login(username=email, password=password)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, vue.login, email, password)
         if not result:
             raise Exception("Could not authenticate with Emporia API")
     except Exception:

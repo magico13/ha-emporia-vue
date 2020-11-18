@@ -2,6 +2,7 @@
 from datetime import timedelta
 import logging
 
+import asyncio
 import async_timeout
 
 from homeassistant.const import DEVICE_CLASS_POWER, POWER_WATT, ENERGY_WATT_HOUR, ENERGY_KILO_WATT_HOUR
@@ -49,7 +50,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             # Note: asyncio.TimeoutError and aiohttp.ClientError are already
             # handled by the data update coordinator.
             data = {}
-            channels = vue.get_recent_usage(scale=Scale.MINUTE.value)
+            loop = asyncio.get_event_loop()
+            channels = await loop.run_in_executor(None, vue.get_recent_usage, Scale.MINUTE.value)
             if channels:
                 for channel in channels:
                     id = '{0}-{1}'.format(channel.device_gid, channel.channel_num)
@@ -83,8 +85,6 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     )
 
     await coordinator.async_refresh()
-
-    _LOGGER.warn(coordinator.data)
 
     async_add_entities(
         CurrentVuePowerSensor(coordinator, id) for idx, id in enumerate(coordinator.data)
