@@ -40,6 +40,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
     vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
 
+    # Populate the initial device information? ie get_devices() and populate_device_properties()
+
     async def async_update_data():
         """Fetch data from API endpoint.
 
@@ -50,26 +52,24 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             # Note: asyncio.TimeoutError and aiohttp.ClientError are already
             # handled by the data update coordinator.
             data = {}
-            loop = asyncio.get_event_loop()
-            channels = await loop.run_in_executor(None, vue.get_recent_usage, Scale.MINUTE.value)
-            if channels:
-                for channel in channels:
-                    id = '{0}-{1}'.format(channel.device_gid, channel.channel_num)
-                    data[id] = {
-                            "device_gid": channel.device_gid,
-                            "channel_num": channel.channel_num,
-                            "usage": round(channel.usage),
-                            "scale": Scale.MINUTE.value,
-                            "channel": channel
-                        }
-                    
-                    # if channel.device_gid == gid and channel.channel_num == num:
-                    #     usage = round(channel.usage)
-                    #     if self._iskwh:
-                    #         usage /= 1000.0
-                    #     self._state = usage
-            #async with async_timeout.timeout(10):
-            #    return await vue.get_recent_usage(scale=Scale.MINUTE.value)
+            scales = [
+                Scale.MINUTE.value,
+                Scale.DAY.value,
+                Scale.MONTH.value
+            ]
+            for scale in scales:
+                loop = asyncio.get_event_loop()
+                channels = await loop.run_in_executor(None, vue.get_recent_usage, scale)
+                if channels:
+                    for channel in channels:
+                        id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
+                        data[id] = {
+                                "device_gid": channel.device_gid,
+                                "channel_num": channel.channel_num,
+                                "usage": round(channel.usage),
+                                "scale": scale,
+                                "channel": channel
+                            }
             return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Emporia API: {err}")
@@ -90,24 +90,6 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         CurrentVuePowerSensor(coordinator, id) for idx, id in enumerate(coordinator.data)
     )
 
-
-
-
-
-    # vue_devices = vue.get_devices()
-
-    # Add a sensor for each device channel
-    # devices = []
-    # for device in vue_devices:
-    #     device = vue.populate_device_properties(device)
-    #     for channel in device.channels:
-    #         devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.MINUTE.value))
-    #         devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.DAY.value))
-    #         devices.append(CurrentVuePowerSensor(vue, device, channel, Scale.MONTH.value))
-
-    # add_entities(devices)
-
-
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     """Representation of a Vue Sensor's current power."""
 
@@ -122,17 +104,6 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
         dName = 'test'#self._channel.name# or device.device_name
         self._name = f'Power {dName} {self._channel.channel_num} {self._scale}'
         self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
-
-    # def __init__(self, vue, device, channel, scale):
-    #     """Initialize the sensor."""
-    #     self._state = None
-    #     self._vue = vue
-    #     self._device = device
-    #     self._channel = channel
-    #     dName = channel.name or device.device_name
-    #     self._name = f'Power {dName} {self._channel.channel_num} {scale}'
-    #     self._scale = scale
-    #     self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
 
     @property
     def name(self):
@@ -167,26 +138,3 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
             return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
         else:
             return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
-
-
-    # def update(self):
-    #     """Fetch new state data for the sensor.
-
-    #     This is the only method that should fetch new data for Home Assistant.
-    #     """
-    #     gid = self._channel.device_gid
-    #     num = self._channel.channel_num
-
-    #     # TODO: each sensor shouldn't do this separately
-    #     channels = self._vue.get_recent_usage(scale=self._scale)
-    #     if channels:
-    #         for channel in channels:
-    #             if channel.device_gid == gid and channel.channel_num == num:
-    #                 usage = round(channel.usage)
-    #                 if self._iskwh:
-    #                     usage /= 1000.0
-    #                 self._state = usage
-    #                 return
-
-    #     self._state = None
-    #     return
