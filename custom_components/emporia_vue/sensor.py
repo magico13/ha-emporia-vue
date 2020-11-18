@@ -48,19 +48,19 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         try:
             # Note: asyncio.TimeoutError and aiohttp.ClientError are already
             # handled by the data update coordinator.
-            data = []
+            data = {}
             channels = vue.get_recent_usage(scale=Scale.MINUTE.value)
             if channels:
                 for channel in channels:
-                    data.append(
-                        {
+                    id = '{0}-{1}'.format(channel.device_gid, channel.channel_num)
+                    data[id] = {
                             "device_gid": channel.device_gid,
                             "channel_num": channel.channel_num,
                             "usage": round(channel.usage),
                             "scale": Scale.MINUTE.value,
                             "channel": channel
                         }
-                    )
+                    
                     # if channel.device_gid == gid and channel.channel_num == num:
                     #     usage = round(channel.usage)
                     #     if self._iskwh:
@@ -84,8 +84,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     await coordinator.async_refresh()
 
+    _LOGGER.warn(coordinator.data)
+
     async_add_entities(
-        CurrentVuePowerSensor(coordinator, idx) for idx, ent in enumerate(coordinator.data)
+        CurrentVuePowerSensor(coordinator, id) for idx, id in enumerate(coordinator.data)
     )
 
 
@@ -109,15 +111,15 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     """Representation of a Vue Sensor's current power."""
 
-    def __init__(self, coordinator, index):
+    def __init__(self, coordinator, id):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
-        self._index = index
-        self._state = None
-        self._scale = coordinator.data[index]["scale"]
+        #self._state = coordinator.data[index]['usage']
+        self._id = id
+        self._scale = coordinator.data[id]["scale"]
         #self._device = device
-        self._channel = coordinator.data[index]["channel"]
-        dName = self._channel.name# or device.device_name
+        self._channel = coordinator.data[id]["channel"]
+        dName = 'test'#self._channel.name# or device.device_name
         self._name = f'Power {dName} {self._channel.channel_num} {self._scale}'
         self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
 
@@ -140,7 +142,10 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._state
+        usage = self.coordinator.data[self._id]['usage']
+        if self._iskwh:
+            usage /= 1000.0
+        return usage
 
     @property
     def unit_of_measurement(self):
