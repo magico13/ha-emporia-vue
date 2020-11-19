@@ -35,12 +35,21 @@ data model
 ]
 """
 
+device_information = [] # data is the populated device objects
+
+
 #def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
     vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
 
     # Populate the initial device information? ie get_devices() and populate_device_properties()
+
+    loop = asyncio.get_event_loop()
+    devices = await loop.run_in_executor(None, vue.get_devices)
+    for device in devices:
+        await loop.run_in_executor(None, vue.populate_device_properties, device)
+        device_information.append(device)
 
     async def async_update_data():
         """Fetch data from API endpoint.
@@ -64,21 +73,21 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                     for channel in channels:
                         id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
                         data[id] = {
-                                "device_gid": channel.device_gid,
-                                "channel_num": channel.channel_num,
-                                "usage": round(channel.usage),
-                                "scale": scale,
-                                "channel": channel
+                                'device_gid': channel.device_gid,
+                                'channel_num': channel.channel_num,
+                                'usage': round(channel.usage),
+                                'scale': scale,
+                                'channel': channel
                             }
             return data
         except Exception as err:
-            raise UpdateFailed(f"Error communicating with Emporia API: {err}")
+            raise UpdateFailed(f'Error communicating with Emporia API: {err}')
 
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         # Name of the data. For logging purposes.
-        name="sensor",
+        name='sensor',
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
         update_interval=timedelta(seconds=60),
@@ -98,10 +107,20 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
         super().__init__(coordinator)
         #self._state = coordinator.data[index]['usage']
         self._id = id
-        self._scale = coordinator.data[id]["scale"]
-        #self._device = device
-        self._channel = coordinator.data[id]["channel"]
-        dName = 'test'#self._channel.name# or device.device_name
+        self._scale = coordinator.data[id]['scale']
+        device_gid = coordinator.data[id]['device_gid']
+        channel_num = coordinator.data[id]['channel_num']
+        for device in device_information:
+            if device.device_gid == device_gid:
+                for channel in device.channels:
+                    if channel.channel_num == channel_num:
+                        self._device = device
+                        self._channel = channel
+                        break
+        if self._channel is None:
+            _LOGGER.error('No channel found for device_gid {0} and channel_num {1}'.format(device_gid, channel_num))
+        
+        dName = self._channel.name or self._device.device_name
         self._name = f'Power {dName} {self._channel.channel_num} {self._scale}'
         self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
 
@@ -135,6 +154,21 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     def unique_id(self):
         """Unique ID for the sensor"""
         if self._scale == Scale.MINUTE.value:
-            return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
+            return f'sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}'
         else:
-            return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
+            return f'sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}'
+
+    @property
+    def device_info(self):
+        dName = self._channel.name or self._device.device_name
+
+        return {
+            "identifiers": {
+                # Serial numbers are unique identifiers within a specific domain
+                (DOMAIN, '{0}-{1}'.format(self._device.device_gid, self._channel.channel_num))
+            },
+            "name": dName,
+            "model": self._device.model,
+            "sw_version": self._device.firmware,
+            #"via_device": self._device.device_gid # might be able to map the extender, nested outlets
+        }
