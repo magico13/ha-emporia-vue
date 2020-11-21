@@ -21,22 +21,7 @@ from pyemvue.device import VueDevice, VueDeviceChannel, VuewDeviceChannelUsage
 
 _LOGGER = logging.getLogger(__name__)
 
-
-"""
-data model
-[
-    {
-        "device_gid": 1234,
-        "channel_num": 5678,
-        "usage": 12.34,
-        "scale": "1MIN"
-    },
-    {}
-]
-"""
-
 device_information = [] # data is the populated device objects
-
 
 #def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass, config_entry, async_add_entities):

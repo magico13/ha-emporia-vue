@@ -28,7 +28,7 @@ CONFIG_SCHEMA = vol.Schema(
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "switch"]
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Emporia Vue component."""
@@ -65,9 +65,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     except Exception:
         _LOGGER.error("Could not authenticate with Emporia API")
         return False
-
-    # Get device data from Emporia API
-    #discovered_devices = vue.get_devices()
 
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue
