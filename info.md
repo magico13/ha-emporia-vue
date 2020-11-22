@@ -1,6 +1,6 @@
 # Emporia Vue Integration
 
-Adds a new sensor showing power consumption for the last minute, for each power channel. Configured right inside Home Assistant, no manual config file editing required.
+Adds a new sensor showing power consumption for the last minute, day, and month, for each power channel. Also supports toggling Emporia Smart Switches. Configured right inside Home Assistant, no manual config file editing required.
 
 After installation, enable the integration in the Home Assistant integration configuration page, then enter the email and password used for the Emporia app.
 
