@@ -15,7 +15,10 @@ _LOGGER = logging.getLogger(__name__)
 DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): str,
-        vol.Required(CONF_PASSWORD): str
+        vol.Required(CONF_PASSWORD): str,
+        vol.Optional("enable_1s", default=False): bool,
+        vol.Optional("enable_1d", default=True): bool,
+        vol.Optional("enable_1mon", default=True): bool
     }
 )
 
@@ -52,7 +55,10 @@ async def validate_input(hass: core.HomeAssistant, data):
     # Return info that you want to store in the config entry.
     return {
         "title": f"Customer {hub.vue.customer.customer_gid}",
-        "gid": f"{hub.vue.customer.customer_gid}"
+        "gid": f"{hub.vue.customer.customer_gid}",
+        "enable_1s": data["enable_1s"],
+        "enable_1d": data["enable_1d"],
+        "enable_1mon": data["enable_1mon"]
     }
 
 
