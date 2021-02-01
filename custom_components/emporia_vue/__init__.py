@@ -75,7 +75,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         return False
 
     hass.data[DOMAIN][entry.entry_id] = {
-        VUE_DATA: vue
+        VUE_DATA: vue,
+        ENABLE_1S: entry_data[ENABLE_1S],
+        ENABLE_1M: entry_data[ENABLE_1M],
+        ENABLE_1D: entry_data[ENABLE_1D],
+        ENABLE_1MON: entry_data[ENABLE_1MON]
     }
 
     for component in PLATFORMS:

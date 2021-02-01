@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, VUE_DATA
+from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
 from pyemvue import pyemvue
 from pyemvue.enums import Scale
@@ -22,6 +22,8 @@ from pyemvue.device import VueDevice, VueDeviceChannel, VuewDeviceChannelUsage
 _LOGGER = logging.getLogger(__name__)
 
 device_information = [] # data is the populated device objects
+scales_1s = [Scale.SECOND.value]
+scales_1m = []
 
 async def update_sensors(vue, scales):
     try:
@@ -64,12 +66,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
-        scales = [
-                Scale.MINUTE.value,
-                Scale.DAY.value,
-                Scale.MONTH.value
-            ]
-        return await update_sensors(vue, scales)
+        return await update_sensors(vue, scales_1m)
 
     async def async_update_data_1second():
         """Fetch data from API endpoint at a 1 second interval
@@ -77,23 +74,30 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
-        scales = [
-                Scale.SECOND.value
-            ]
-        return await update_sensors(vue, scales)
+        return await update_sensors(vue, scales_1s)
         
+    _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1M]: scales_1m.append(Scale.MINUTE.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1D]: scales_1m.append(Scale.DAY.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1MON]: scales_1m.append(Scale.MONTH.value)
 
-    coordinator_1min = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name='sensor',
-        update_method=async_update_data_1min,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(seconds=60),
-    )
+    if scales_1m:
+        coordinator_1min = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name='sensor',
+            update_method=async_update_data_1min,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=60),
+        )
+        await coordinator_1min.async_refresh()
+    
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1min, id) for idx, id in enumerate(coordinator_1min.data)
+        )
 
-    if config_entry[ENABLE_1S]:
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1S]:
         coordinator_1s = DataUpdateCoordinator(
             hass,
             _LOGGER,
@@ -107,14 +111,6 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1s, id) for idx, id in enumerate(coordinator_1s.data)
         )
-
-    #todo: add checks for other scales enabled
-    await coordinator_1min.async_refresh()
-    
-    async_add_entities(
-        CurrentVuePowerSensor(coordinator_1min, id) for idx, id in enumerate(coordinator_1min.data)
-    )
-
     
 
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
