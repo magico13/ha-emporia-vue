@@ -77,7 +77,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
         ENABLE_1S: False if ENABLE_1S not in entry_data else entry_data[ENABLE_1S],
-        ENABLE_1M: True if ENABLE_1M not in entry_data[ENABLE_1M] else entry_data[ENABLE_1M],
+        ENABLE_1M: True if ENABLE_1M not in entry_data else entry_data[ENABLE_1M],
         ENABLE_1D: True if ENABLE_1D not in entry_data else entry_data[ENABLE_1D],
         ENABLE_1MON: True if ENABLE_1MON not in entry_data else entry_data[ENABLE_1MON]
     }
