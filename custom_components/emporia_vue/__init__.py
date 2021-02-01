@@ -12,7 +12,7 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from pyemvue import PyEmVue
 from pyemvue.device import VueDevice, VueDeviceChannel
 
-from .const import DOMAIN, VUE_DATA
+from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -20,6 +20,10 @@ CONFIG_SCHEMA = vol.Schema(
             {
                 vol.Required(CONF_EMAIL): cv.string,
                 vol.Required(CONF_PASSWORD): cv.string,
+                vol.Optional(ENABLE_1S, default=False): cv.boolean,
+                vol.Optional(ENABLE_1M, default=True): cv.boolean,
+                vol.Optional(ENABLE_1D, default=True): cv.boolean,
+                vol.Optional(ENABLE_1MON, default=True): cv.boolean
             }
         )
     }, 
@@ -44,6 +48,10 @@ async def async_setup(hass: HomeAssistant, config: dict):
             data={
                 CONF_EMAIL: conf[CONF_EMAIL],
                 CONF_PASSWORD: conf[CONF_PASSWORD],
+                ENABLE_1S: conf[ENABLE_1S],
+                ENABLE_1M: conf[ENABLE_1M],
+                ENABLE_1D: conf[ENABLE_1D],
+                ENABLE_1MON: conf[ENABLE_1MON]
             },
         )
     )

@@ -93,26 +93,29 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         update_interval=timedelta(seconds=60),
     )
 
-    coordinator_1s = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name='sensor1s',
-        update_method=async_update_data_1second,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(seconds=1),
-    )
+    if config_entry[ENABLE_1S]:
+        coordinator_1s = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name='sensor1s',
+            update_method=async_update_data_1second,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=1),
+        )
+        await coordinator_1s.async_refresh()
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1s, id) for idx, id in enumerate(coordinator_1s.data)
+        )
 
+    #todo: add checks for other scales enabled
     await coordinator_1min.async_refresh()
-    await coordinator_1s.async_refresh()
-
+    
     async_add_entities(
         CurrentVuePowerSensor(coordinator_1min, id) for idx, id in enumerate(coordinator_1min.data)
     )
 
-    async_add_entities(
-        CurrentVuePowerSensor(coordinator_1s, id) for idx, id in enumerate(coordinator_1s.data)
-    )
+    
 
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     """Representation of a Vue Sensor's current power."""
