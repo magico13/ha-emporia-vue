@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, VUE_DATA
+from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
 from pyemvue import pyemvue
 from pyemvue.enums import Scale
@@ -22,6 +22,30 @@ from pyemvue.device import VueDevice, VueDeviceChannel, VuewDeviceChannelUsage
 _LOGGER = logging.getLogger(__name__)
 
 device_information = [] # data is the populated device objects
+scales_1s = [Scale.SECOND.value]
+scales_1m = []
+
+async def update_sensors(vue, scales):
+    try:
+        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
+        # handled by the data update coordinator.
+        data = {}
+        loop = asyncio.get_event_loop()
+        for scale in scales:
+            channels = await loop.run_in_executor(None, vue.get_recent_usage, scale)
+            if channels:
+                for channel in channels:
+                    id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
+                    data[id] = {
+                            'device_gid': channel.device_gid,
+                            'channel_num': channel.channel_num,
+                            'usage': round(channel.usage),
+                            'scale': scale,
+                            'channel': channel
+                        }
+        return data
+    except Exception as err:
+        raise UpdateFailed(f'Error communicating with Emporia API: {err}')
 
 #def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -36,53 +60,58 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         await loop.run_in_executor(None, vue.populate_device_properties, device)
         device_information.append(device)
 
-    async def async_update_data():
-        """Fetch data from API endpoint.
+    async def async_update_data_1min():
+        """Fetch data from API endpoint at a 1 minute interval
 
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
-        try:
-            # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-            # handled by the data update coordinator.
-            data = {}
-            scales = [
-                Scale.MINUTE.value,
-                Scale.DAY.value,
-                Scale.MONTH.value
-            ]
-            for scale in scales:
-                loop = asyncio.get_event_loop()
-                channels = await loop.run_in_executor(None, vue.get_recent_usage, scale)
-                if channels:
-                    for channel in channels:
-                        id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
-                        data[id] = {
-                                'device_gid': channel.device_gid,
-                                'channel_num': channel.channel_num,
-                                'usage': round(channel.usage),
-                                'scale': scale,
-                                'channel': channel
-                            }
-            return data
-        except Exception as err:
-            raise UpdateFailed(f'Error communicating with Emporia API: {err}')
+        return await update_sensors(vue, scales_1m)
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name='sensor',
-        update_method=async_update_data,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(seconds=60),
-    )
+    async def async_update_data_1second():
+        """Fetch data from API endpoint at a 1 second interval
 
-    await coordinator.async_refresh()
+        This is the place to pre-process the data to lookup tables
+        so entities can quickly look up their data.
+        """
+        return await update_sensors(vue, scales_1s)
+        
+    _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1M]: scales_1m.append(Scale.MINUTE.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1D]: scales_1m.append(Scale.DAY.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1MON]: scales_1m.append(Scale.MONTH.value)
 
-    async_add_entities(
-        CurrentVuePowerSensor(coordinator, id) for idx, id in enumerate(coordinator.data)
-    )
+    if scales_1m:
+        coordinator_1min = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name='sensor',
+            update_method=async_update_data_1min,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=60),
+        )
+        await coordinator_1min.async_refresh()
+    
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1min, id) for idx, id in enumerate(coordinator_1min.data)
+        )
+
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1S]:
+        coordinator_1s = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name='sensor1s',
+            update_method=async_update_data_1second,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=1),
+        )
+        await coordinator_1s.async_refresh()
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1s, id) for idx, id in enumerate(coordinator_1s.data)
+        )
+    
 
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     """Representation of a Vue Sensor's current power."""

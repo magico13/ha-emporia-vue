@@ -7,6 +7,7 @@ from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
 from .const import DOMAIN  # pylint:disable=unused-import
+from .const import ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
 from pyemvue import PyEmVue
 
@@ -15,7 +16,11 @@ _LOGGER = logging.getLogger(__name__)
 DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): str,
-        vol.Required(CONF_PASSWORD): str
+        vol.Required(CONF_PASSWORD): str,
+        vol.Optional(ENABLE_1S, default=False): bool,
+        vol.Optional(ENABLE_1M, default=True): bool,
+        vol.Optional(ENABLE_1D, default=True): bool,
+        vol.Optional(ENABLE_1MON, default=True): bool
     }
 )
 
@@ -52,7 +57,11 @@ async def validate_input(hass: core.HomeAssistant, data):
     # Return info that you want to store in the config entry.
     return {
         "title": f"Customer {hub.vue.customer.customer_gid}",
-        "gid": f"{hub.vue.customer.customer_gid}"
+        "gid": f"{hub.vue.customer.customer_gid}",
+        ENABLE_1S: data[ENABLE_1S],
+        ENABLE_1M: data[ENABLE_1M],
+        ENABLE_1D: data[ENABLE_1D],
+        ENABLE_1MON: data[ENABLE_1MON]
     }
 
 
