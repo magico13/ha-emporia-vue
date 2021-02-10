@@ -17,11 +17,12 @@ from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MO
 
 from pyemvue import pyemvue
 from pyemvue.enums import Scale
-from pyemvue.device import VueDevice, VueDeviceChannel, VuewDeviceChannelUsage
+from pyemvue.device import VueDevice, VueDeviceChannel, VueDeviceChannelUsage
 
 _LOGGER = logging.getLogger(__name__)
 
 device_information = [] # data is the populated device objects
+device_gids = []
 scales_1s = [Scale.SECOND.value]
 scales_1m = []
 
@@ -32,14 +33,18 @@ async def update_sensors(vue, scales):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
-            channels = await loop.run_in_executor(None, vue.get_recent_usage, scale)
+            channels = await loop.run_in_executor(None, vue.get_devices_usage, device_gids, None, scale)
             if channels:
                 for channel in channels:
                     id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
+                    usage = round(channel.usage, 3)
+                    if scale == Scale.MINUTE.value: usage = round(60 * 1000 * channel.usage) #convert from kwh to w rate
+                    elif scale == Scale.SECOND.value: usage = round(3600 * 1000 * channel.usage) #convert to rate
+                    elif scale == Scale.MINUTES_15.value: usage = round(4 * 1000 * channel.usage) #this might never be used but for safety, convert to rate
                     data[id] = {
                             'device_gid': channel.device_gid,
                             'channel_num': channel.channel_num,
-                            'usage': round(channel.usage),
+                            'usage': usage,
                             'scale': scale,
                             'channel': channel
                         }
@@ -57,6 +62,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     loop = asyncio.get_event_loop()
     devices = await loop.run_in_executor(None, vue.get_devices)
     for device in devices:
+        if not device.device_gid in device_gids: device_gids.append(device.device_gid)
         await loop.run_in_executor(None, vue.populate_device_properties, device)
         device_information.append(device)
 
@@ -147,8 +153,6 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     def state(self):
         """Return the state of the sensor."""
         usage = self.coordinator.data[self._id]['usage']
-        if self._iskwh:
-            usage /= 1000.0
         return usage
 
     @property
