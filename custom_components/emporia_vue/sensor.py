@@ -5,7 +5,12 @@ import logging
 import asyncio
 import async_timeout
 
-from homeassistant.const import DEVICE_CLASS_POWER, POWER_WATT, ENERGY_WATT_HOUR, ENERGY_KILO_WATT_HOUR
+from homeassistant.const import (
+    DEVICE_CLASS_POWER,
+    POWER_WATT,
+    ENERGY_WATT_HOUR,
+    ENERGY_KILO_WATT_HOUR,
+)
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -21,7 +26,7 @@ from pyemvue.device import VueDevice, VueDeviceChannel, VueDeviceChannelUsage
 
 _LOGGER = logging.getLogger(__name__)
 
-device_information = [] # data is the populated device objects
+device_information = []  # data is the populated device objects
 device_gids = []
 scales_1s = [Scale.SECOND.value]
 scales_1m = []
@@ -33,36 +38,53 @@ async def update_sensors(vue, scales):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
-            channels = await loop.run_in_executor(None, vue.get_devices_usage, device_gids, None, scale)
+            channels = await loop.run_in_executor(
+                None, vue.get_devices_usage, device_gids, None, scale
+            )
             if channels:
                 for channel in channels:
-                    id = '{0}-{1}-{2}'.format(channel.device_gid, channel.channel_num, scale)
+                    id = "{0}-{1}-{2}".format(
+                        channel.device_gid, channel.channel_num, scale
+                    )
                     usage = round(channel.usage, 3)
-                    if scale == Scale.MINUTE.value: usage = round(60 * 1000 * channel.usage) #convert from kwh to w rate
-                    elif scale == Scale.SECOND.value: usage = round(3600 * 1000 * channel.usage) #convert to rate
-                    elif scale == Scale.MINUTES_15.value: usage = round(4 * 1000 * channel.usage) #this might never be used but for safety, convert to rate
+                    if scale == Scale.MINUTE.value:
+                        usage = round(
+                            60 * 1000 * channel.usage
+                        )  # convert from kwh to w rate
+                    elif scale == Scale.SECOND.value:
+                        usage = round(3600 * 1000 * channel.usage)  # convert to rate
+                    elif scale == Scale.MINUTES_15.value:
+                        usage = round(
+                            4 * 1000 * channel.usage
+                        )  # this might never be used but for safety, convert to rate
                     data[id] = {
-                            'device_gid': channel.device_gid,
-                            'channel_num': channel.channel_num,
-                            'usage': usage,
-                            'scale': scale,
-                            'channel': channel
-                        }
+                        "device_gid": channel.device_gid,
+                        "channel_num": channel.channel_num,
+                        "usage": usage,
+                        "scale": scale,
+                        "channel": channel,
+                    }
+            else:
+                _LOGGER.warn("No channels found during update")
+
         return data
     except Exception as err:
-        raise UpdateFailed(f'Error communicating with Emporia API: {err}')
+        raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
-#def setup_platform(hass, config, add_entities, discovery_info=None):
+
+# def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
     vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
 
-    # Populate the initial device information? ie get_devices() and populate_device_properties()
+    # Populate the initial device information, ie get_devices() and populate_device_properties()
 
     loop = asyncio.get_event_loop()
     devices = await loop.run_in_executor(None, vue.get_devices)
+    _LOGGER.info("Found {0} Emporia devices".format(len(devices)))
     for device in devices:
-        if not device.device_gid in device_gids: device_gids.append(device.device_gid)
+        if not device.device_gid in device_gids:
+            device_gids.append(device.device_gid)
         await loop.run_in_executor(None, vue.populate_device_properties, device)
         device_information.append(device)
 
@@ -81,43 +103,53 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         so entities can quickly look up their data.
         """
         return await update_sensors(vue, scales_1s)
-        
+
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1M]: scales_1m.append(Scale.MINUTE.value)
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1D]: scales_1m.append(Scale.DAY.value)
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1MON]: scales_1m.append(Scale.MONTH.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1M]:
+        scales_1m.append(Scale.MINUTE.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1D]:
+        scales_1m.append(Scale.DAY.value)
+    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1MON]:
+        scales_1m.append(Scale.MONTH.value)
 
     if scales_1m:
         coordinator_1min = DataUpdateCoordinator(
             hass,
             _LOGGER,
             # Name of the data. For logging purposes.
-            name='sensor',
+            name="sensor",
             update_method=async_update_data_1min,
             # Polling interval. Will only be polled if there are subscribers.
             update_interval=timedelta(seconds=60),
         )
         await coordinator_1min.async_refresh()
-    
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, id) for idx, id in enumerate(coordinator_1min.data)
-        )
+        if coordinator_1min.data:
+            async_add_entities(
+                CurrentVuePowerSensor(coordinator_1min, id)
+                for idx, id in enumerate(coordinator_1min.data)
+            )
+        else:
+            _LOGGER.error("No data found for 1 minute updater")
 
     if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1S]:
         coordinator_1s = DataUpdateCoordinator(
             hass,
             _LOGGER,
             # Name of the data. For logging purposes.
-            name='sensor1s',
+            name="sensor1s",
             update_method=async_update_data_1second,
             # Polling interval. Will only be polled if there are subscribers.
             update_interval=timedelta(seconds=1),
         )
         await coordinator_1s.async_refresh()
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1s, id) for idx, id in enumerate(coordinator_1s.data)
-        )
-    
+        if coordinator_1s.data:
+            async_add_entities(
+                CurrentVuePowerSensor(coordinator_1s, id)
+                for idx, id in enumerate(coordinator_1s.data)
+            )
+        else:
+            _LOGGER.error("No data found for 1 second updater")
+
 
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     """Representation of a Vue Sensor's current power."""
@@ -125,11 +157,10 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     def __init__(self, coordinator, id):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
-        #self._state = coordinator.data[index]['usage']
         self._id = id
-        self._scale = coordinator.data[id]['scale']
-        device_gid = coordinator.data[id]['device_gid']
-        channel_num = coordinator.data[id]['channel_num']
+        self._scale = coordinator.data[id]["scale"]
+        device_gid = coordinator.data[id]["device_gid"]
+        channel_num = coordinator.data[id]["channel_num"]
         for device in device_information:
             if device.device_gid == device_gid:
                 for channel in device.channels:
@@ -138,11 +169,19 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
                         self._channel = channel
                         break
         if self._channel is None:
-            _LOGGER.error('No channel found for device_gid {0} and channel_num {1}'.format(device_gid, channel_num))
-        
+            _LOGGER.error(
+                "No channel found for device_gid {0} and channel_num {1}".format(
+                    device_gid, channel_num
+                )
+            )
+
         dName = self._channel.name or self._device.device_name
-        self._name = f'Power {dName} {self._channel.channel_num} {self._scale}'
-        self._iskwh = (self._scale != Scale.MINUTE.value and self._scale != Scale.SECOND.value and self._scale != Scale.MINUTES_15.value)
+        self._name = f"Power {dName} {self._channel.channel_num} {self._scale}"
+        self._iskwh = (
+            self._scale != Scale.MINUTE.value
+            and self._scale != Scale.SECOND.value
+            and self._scale != Scale.MINUTES_15.value
+        )
 
     @property
     def name(self):
@@ -152,7 +191,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     @property
     def state(self):
         """Return the state of the sensor."""
-        usage = self.coordinator.data[self._id]['usage']
+        usage = self.coordinator.data[self._id]["usage"]
         return usage
 
     @property
@@ -162,7 +201,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
             return ENERGY_KILO_WATT_HOUR
         else:
             return POWER_WATT
-    
+
     @property
     def device_class(self):
         """The type of sensor"""
@@ -172,9 +211,9 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     def unique_id(self):
         """Unique ID for the sensor"""
         if self._scale == Scale.MINUTE.value:
-            return f'sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}'
+            return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
         else:
-            return f'sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}'
+            return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
 
     @property
     def device_info(self):
@@ -183,10 +222,15 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, '{0}-{1}'.format(self._device.device_gid, self._channel.channel_num))
+                (
+                    DOMAIN,
+                    "{0}-{1}".format(
+                        self._device.device_gid, self._channel.channel_num
+                    ),
+                )
             },
             "name": dName,
             "model": self._device.model,
             "sw_version": self._device.firmware,
-            #"via_device": self._device.device_gid # might be able to map the extender, nested outlets
+            # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
         }
