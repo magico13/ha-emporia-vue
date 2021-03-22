@@ -12,5 +12,6 @@
   "dependencies": [],
   "codeowners": [
     "@magico13"
-  ]
+  ],
+  "version": "0.3.1"
 }
