@@ -1,154 +1,41 @@
 """Platform for sensor integration."""
-from datetime import timedelta
 import logging
 
-import asyncio
-import async_timeout
 
 from homeassistant.const import (
     DEVICE_CLASS_POWER,
     POWER_WATT,
-    ENERGY_WATT_HOUR,
     ENERGY_KILO_WATT_HOUR,
 )
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
 )
 
-from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
+from .const import DOMAIN
 
-from pyemvue import pyemvue
 from pyemvue.enums import Scale
-from pyemvue.device import VueDevice, VueDeviceChannel, VueDeviceChannelUsage
 
 _LOGGER = logging.getLogger(__name__)
-
-device_information = []  # data is the populated device objects
-device_gids = []
-scales_1s = [Scale.SECOND.value]
-scales_1m = []
-
-async def update_sensors(vue, scales):
-    try:
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
-        data = {}
-        loop = asyncio.get_event_loop()
-        for scale in scales:
-            channels = await loop.run_in_executor(
-                None, vue.get_devices_usage, device_gids, None, scale
-            )
-            if channels:
-                for channel in channels:
-                    id = "{0}-{1}-{2}".format(
-                        channel.device_gid, channel.channel_num, scale
-                    )
-                    usage = round(channel.usage, 3)
-                    if scale == Scale.MINUTE.value:
-                        usage = round(
-                            60 * 1000 * channel.usage
-                        )  # convert from kwh to w rate
-                    elif scale == Scale.SECOND.value:
-                        usage = round(3600 * 1000 * channel.usage)  # convert to rate
-                    elif scale == Scale.MINUTES_15.value:
-                        usage = round(
-                            4 * 1000 * channel.usage
-                        )  # this might never be used but for safety, convert to rate
-                    data[id] = {
-                        "device_gid": channel.device_gid,
-                        "channel_num": channel.channel_num,
-                        "usage": usage,
-                        "scale": scale,
-                        "channel": channel,
-                    }
-            else:
-                _LOGGER.warn("No channels found during update")
-
-        return data
-    except Exception as err:
-        raise UpdateFailed(f"Error communicating with Emporia API: {err}")
-
 
 # def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
-    vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-
-    # Populate the initial device information, ie get_devices() and populate_device_properties()
-
-    loop = asyncio.get_event_loop()
-    devices = await loop.run_in_executor(None, vue.get_devices)
-    _LOGGER.info("Found {0} Emporia devices".format(len(devices)))
-    for device in devices:
-        if not device.device_gid in device_gids:
-            device_gids.append(device.device_gid)
-        await loop.run_in_executor(None, vue.populate_device_properties, device)
-        device_information.append(device)
-
-    async def async_update_data_1min():
-        """Fetch data from API endpoint at a 1 minute interval
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
-        return await update_sensors(vue, scales_1m)
-
-    async def async_update_data_1second():
-        """Fetch data from API endpoint at a 1 second interval
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
-        return await update_sensors(vue, scales_1s)
+    coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
+    coordinator_1s = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1s"]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1M]:
-        scales_1m.append(Scale.MINUTE.value)
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1D]:
-        scales_1m.append(Scale.DAY.value)
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1MON]:
-        scales_1m.append(Scale.MONTH.value)
 
-    if scales_1m:
-        coordinator_1min = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name="sensor",
-            update_method=async_update_data_1min,
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=60),
-        )
-        await coordinator_1min.async_refresh()
-        if coordinator_1min.data:
-            async_add_entities(
-                CurrentVuePowerSensor(coordinator_1min, id)
-                for idx, id in enumerate(coordinator_1min.data)
-            )
-        else:
-            _LOGGER.error("No data found for 1 minute updater")
+    async_add_entities(
+        CurrentVuePowerSensor(coordinator_1min, id)
+        for idx, id in enumerate(coordinator_1min.data)
+    )
 
-    if hass.data[DOMAIN][config_entry.entry_id][ENABLE_1S]:
-        coordinator_1s = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name="sensor1s",
-            update_method=async_update_data_1second,
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=1),
+    if coordinator_1s:
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1s, id)
+            for idx, id in enumerate(coordinator_1s.data)
         )
-        await coordinator_1s.async_refresh()
-        if coordinator_1s.data:
-            async_add_entities(
-                CurrentVuePowerSensor(coordinator_1s, id)
-                for idx, id in enumerate(coordinator_1s.data)
-            )
-        else:
-            _LOGGER.error("No data found for 1 second updater")
 
 
 class CurrentVuePowerSensor(CoordinatorEntity, Entity):
@@ -161,15 +48,15 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
         self._scale = coordinator.data[id]["scale"]
         device_gid = coordinator.data[id]["device_gid"]
         channel_num = coordinator.data[id]["channel_num"]
-        for device in device_information:
-            if device.device_gid == device_gid:
-                for channel in device.channels:
-                    if channel.channel_num == channel_num:
-                        self._device = device
-                        self._channel = channel
-                        break
+        self._device = coordinator.data[id]["info"]
+        self._channel = None
+        if self._device is not None:
+            for channel in self._device.channels:
+                if channel.channel_num == channel_num:
+                    self._channel = channel
+                    break
         if self._channel is None:
-            _LOGGER.error(
+            raise RuntimeError(
                 "No channel found for device_gid {0} and channel_num {1}".format(
                     device_gid, channel_num
                 )
