@@ -26,10 +26,11 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
-    async_add_entities(
-        CurrentVuePowerSensor(coordinator_1min, id)
-        for idx, id in enumerate(coordinator_1min.data)
-    )
+    if coordinator_1min:
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1min, id)
+            for idx, id in enumerate(coordinator_1min.data)
+        )
 
     if coordinator_1s:
         async_add_entities(
@@ -56,10 +57,11 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
                     self._channel = channel
                     break
         if self._channel is None:
+            _LOGGER.warn(
+                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
+            )
             raise RuntimeError(
-                "No channel found for device_gid {0} and channel_num {1}".format(
-                    device_gid, channel_num
-                )
+                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
             )
 
         dName = self._channel.name or self._device.device_name

@@ -69,6 +69,11 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up Emporia Vue from a config entry."""
+    global device_gids
+    global device_information
+    device_gids = []
+    device_information = []
+
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
     password = entry_data[CONF_PASSWORD]
@@ -87,7 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     scales_1s = []
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
-        _LOGGER.info("Found {0} Emporia devices".format(len(devices)))
+        _LOGGER.warn("Found {0} Emporia devices".format(len(devices)))
         for device in devices:
             if not device.device_gid in device_gids:
                 device_gids.append(device.device_gid)
@@ -129,9 +134,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 update_interval=timedelta(seconds=60),
             )
             await coordinator_1min.async_config_entry_first_refresh()
-
+            _LOGGER.warn(f"1min Update data: {coordinator_1min.data}")
         coordinator_1s = None
         if ENABLE_1S in entry_data and entry_data[ENABLE_1S]:
+            scales_1s.append(Scale.SECOND.value)
             coordinator_1s = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -142,7 +148,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 update_interval=timedelta(seconds=1),
             )
             await coordinator_1s.async_config_entry_first_refresh()
+            _LOGGER.warn(f"1s Update data: {coordinator_1s.data}")
     except Exception as err:
+        _LOGGER.warn(f"Exception while setting up Emporia Vue. Will retry. {err}")
         raise ConfigEntryNotReady(
             f"Exception while setting up Emporia Vue. Will retry. {err}"
         )
@@ -159,7 +167,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 hass.config_entries.async_forward_entry_setup(entry, component)
             )
     except Exception as err:
-        raise ConfigEntryNotReady(f"Expected retry error: {err}")
+        _LOGGER.warn(f"Error setting up platforms: {err}")
+        raise ConfigEntryNotReady(f"Error setting up platforms: {err}")
 
     return True
 
@@ -186,7 +195,6 @@ async def update_sensors(vue, scales):
         # handled by the data update coordinator.
         data = {}
         loop = asyncio.get_event_loop()
-
         for scale in scales:
             channels = await loop.run_in_executor(
                 None, vue.get_devices_usage, device_gids, None, scale
@@ -227,4 +235,5 @@ async def update_sensors(vue, scales):
 
         return data
     except Exception as err:
+        _LOGGER.error(f"Error communicating with Emporia API: {err}")
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
