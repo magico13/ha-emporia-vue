@@ -1,6 +1,6 @@
 """The Emporia Vue integration."""
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 import logging
@@ -92,7 +92,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     scales_1s = []
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
-        _LOGGER.warn("Found {0} Emporia devices".format(len(devices)))
+        total_channels = 0
+        for d in devices:
+            total_channels += len(d.channels)
+        _LOGGER.warn(
+            "Found {0} Emporia devices with {1} total channels".format(
+                len(devices), total_channels
+            )
+        )
         for device in devices:
             if not device.device_gid in device_gids:
                 device_gids.append(device.device_gid)
@@ -196,9 +203,17 @@ async def update_sensors(vue, scales):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
+            now = datetime.utcnow() - timedelta(seconds=1)
             channels = await loop.run_in_executor(
-                None, vue.get_devices_usage, device_gids, None, scale
+                None, vue.get_devices_usage, device_gids, now, scale
             )
+            if not channels:
+                _LOGGER.warn(
+                    f"No channels found during update for scale {scale}. Retrying..."
+                )
+                channels = await loop.run_in_executor(
+                    None, vue.get_devices_usage, device_gids, now, scale
+                )
             if channels:
                 for channel in channels:
                     id = "{0}-{1}-{2}".format(
@@ -231,7 +246,7 @@ async def update_sensors(vue, scales):
                         "info": info,
                     }
             else:
-                _LOGGER.warn("No channels found during update")
+                _LOGGER.warn(f"No channels found during update for scale {scale}")
 
         return data
     except Exception as err:
