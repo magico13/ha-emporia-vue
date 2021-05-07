@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 import logging
+from pyemvue import PyEmVue
+from pyemvue.device import VueDeviceChannel
 from pyemvue.enums import Scale
 
 import voluptuous as vol
@@ -14,7 +16,6 @@ from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
-from pyemvue import PyEmVue
 
 from .const import DOMAIN, VUE_DATA, ENABLE_1S, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
@@ -40,7 +41,7 @@ PLATFORMS = ["sensor", "switch"]
 
 
 device_gids = []
-device_information = []
+device_information = {}
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -72,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     global device_gids
     global device_information
     device_gids = []
-    device_information = []
+    device_information = {}
 
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
@@ -103,8 +104,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         for device in devices:
             if not device.device_gid in device_gids:
                 device_gids.append(device.device_gid)
-            await loop.run_in_executor(None, vue.populate_device_properties, device)
-            device_information.append(device)
+                await loop.run_in_executor(None, vue.populate_device_properties, device)
+                device_information[device.device_gid] = device
+            else:
+                device_information[device.device_gid].channels += device.channels
 
         async def async_update_data_1min():
             """Fetch data from API endpoint at a 1 minute interval
@@ -231,12 +234,31 @@ async def update_sensors(vue, scales):
                             4 * 1000 * channel.usage
                         )  # this might never be used but for safety, convert to rate
                     info = None
-                    for device in device_information:
-                        if device.device_gid == channel.device_gid:
-                            for channel2 in device.channels:
+
+                    if channel.device_gid in device_information:
+                        info = device_information[channel.device_gid]
+                        if channel.channel_num in ["MainsFromGrid", "MainsToGrid"]:
+                            found = False
+                            channel_123 = None
+                            for channel2 in info.channels:
                                 if channel2.channel_num == channel.channel_num:
-                                    info = device
+                                    found = True
                                     break
+                                elif channel2.channel_num == "1,2,3":
+                                    channel_123 = channel2
+                            if not found:
+                                _LOGGER.info(
+                                    f"Adding channel for channel {channel.device_gid}-{channel.channel_num}"
+                                )
+                                info.channels.append(
+                                    VueDeviceChannel(
+                                        gid=channel.device_gid,
+                                        name=None,
+                                        channelNum=channel.channel_num,
+                                        channelMultiplier=channel_123.channel_multiplier,
+                                        channelTypeGid=channel_123.channel_type_gid,
+                                    )
+                                )
 
                     data[id] = {
                         "device_gid": channel.device_gid,
@@ -246,7 +268,7 @@ async def update_sensors(vue, scales):
                         "info": info,
                     }
             else:
-                _LOGGER.warn(f"No channels found during update for scale {scale}")
+                raise UpdateFailed(f"No channels found during update for scale {scale}")
 
         return data
     except Exception as err:
