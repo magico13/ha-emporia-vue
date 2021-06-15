@@ -58,7 +58,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         name='switch',
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(seconds=15),
+        update_interval=timedelta(minutes=5),
     )
 
     await coordinator.async_refresh()

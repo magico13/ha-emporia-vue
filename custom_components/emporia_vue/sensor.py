@@ -22,7 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
-    coordinator_1s = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1s"]
+    coordinator_1hr = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1hr"]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
@@ -32,10 +32,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             for idx, id in enumerate(coordinator_1min.data)
         )
 
-    if coordinator_1s:
+    if coordinator_1hr:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_1s, id)
-            for idx, id in enumerate(coordinator_1s.data)
+            CurrentVuePowerSensor(coordinator_1hr, id)
+            for idx, id in enumerate(coordinator_1hr.data)
         )
 
 
