@@ -138,6 +138,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
             await coordinator_1min.async_config_entry_first_refresh()
             _LOGGER.info(f"1min Update data: {coordinator_1min.data}")
+        coordinator_1hr = None
         if scales_1hr:
             coordinator_1hr = DataUpdateCoordinator(
                 hass,
