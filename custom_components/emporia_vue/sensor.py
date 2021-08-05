@@ -1,13 +1,14 @@
 """Platform for sensor integration."""
+from homeassistant.components.sensor import STATE_CLASS_MEASUREMENT, SensorEntity
 import logging
 
-
 from homeassistant.const import (
+    DEVICE_CLASS_ENERGY,
     DEVICE_CLASS_POWER,
     POWER_WATT,
     ENERGY_KILO_WATT_HOUR,
 )
-from homeassistant.helpers.entity import Entity
+
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
 )
@@ -39,7 +40,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         )
 
 
-class CurrentVuePowerSensor(CoordinatorEntity, Entity):
+class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Vue Sensor's current power."""
 
     def __init__(self, coordinator, id):
@@ -94,7 +95,20 @@ class CurrentVuePowerSensor(CoordinatorEntity, Entity):
     @property
     def device_class(self):
         """The type of sensor"""
-        return DEVICE_CLASS_POWER
+        if self._iskwh:
+            return DEVICE_CLASS_ENERGY
+        else:
+            return DEVICE_CLASS_POWER
+
+    @property
+    def state_class(self):
+        """Type of state."""
+        return STATE_CLASS_MEASUREMENT
+
+    @property
+    def last_reset(self):
+        """The time when the daily/monthly sensor was reset. Midnight local time."""
+        return self.coordinator.data[self._id]["reset"]
 
     @property
     def unique_id(self):

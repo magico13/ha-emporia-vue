@@ -161,7 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
         "coordinator_1min": coordinator_1min,
-        "coordinator_1hr": coordinator_1hr
+        "coordinator_1hr": coordinator_1hr,
     }
 
     try:
@@ -211,6 +211,7 @@ async def update_sensors(vue, scales):
                     None, vue.get_devices_usage, device_gids, now, scale
                 )
             if channels:
+                reset_datetime = get_reset_datetime(scale)
                 for channel in channels:
                     id = "{0}-{1}-{2}".format(
                         channel.device_gid, channel.channel_num, scale
@@ -259,6 +260,7 @@ async def update_sensors(vue, scales):
                         "usage": usage,
                         "scale": scale,
                         "info": info,
+                        "reset": reset_datetime,
                     }
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
@@ -267,3 +269,23 @@ async def update_sensors(vue, scales):
     except Exception as err:
         _LOGGER.error(f"Error communicating with Emporia API: {err}")
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
+
+
+def get_reset_datetime(scale):
+    if not scale_is_energy(scale):
+        return None  # these are live, not accumulating
+    # kwh measures reset depending on the scale
+    if scale == Scale.DAY.value:
+        # reset at midnight of the current day
+        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    elif scale == Scale.MONTH.value:
+        # reset at midnight of the first of the current month
+        return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def scale_is_energy(scale):
+    return (
+        scale != Scale.MINUTE.value
+        and scale != Scale.SECOND.value
+        and scale != Scale.MINUTES_15.value
+    )
