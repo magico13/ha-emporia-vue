@@ -24,19 +24,28 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
     coordinator_1hr = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1hr"]
+    coordinator_day_sensor = hass.data[DOMAIN][config_entry.entry_id][
+        "coordinator_day_sensor"
+    ]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
     if coordinator_1min:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1min, id)
-            for idx, id in enumerate(coordinator_1min.data)
+            for _, id in enumerate(coordinator_1min.data)
         )
 
     if coordinator_1hr:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1hr, id)
-            for idx, id in enumerate(coordinator_1hr.data)
+            for _, id in enumerate(coordinator_1hr.data)
+        )
+
+    if coordinator_day_sensor:
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_day_sensor, id)
+            for _, id in enumerate(coordinator_day_sensor.data)
         )
 
 
@@ -67,11 +76,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
 
         dName = self._channel.name or self._device.device_name
         self._name = f"Power {dName} {self._channel.channel_num} {self._scale}"
-        self._iskwh = (
-            self._scale != Scale.MINUTE.value
-            and self._scale != Scale.SECOND.value
-            and self._scale != Scale.MINUTES_15.value
-        )
+        self._iskwh = self.scale_is_energy()
 
     @property
     def name(self):
@@ -82,7 +87,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
     def state(self):
         """Return the state of the sensor."""
         usage = self.coordinator.data[self._id]["usage"]
-        return usage
+        return self.scale_usage(usage)
 
     @property
     def unit_of_measurement(self):
@@ -137,3 +142,25 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             "sw_version": self._device.firmware,
             # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
         }
+
+    def scale_usage(self, usage):
+        """Scales the usage to the correct timescale and magnitude."""
+        if self._scale == Scale.MINUTE.value:
+            usage = round(60 * 1000 * usage)  # convert from kwh to w rate
+        elif self._scale == Scale.SECOND.value:
+            usage = round(3600 * 1000 * usage)  # convert to rate
+        elif self._scale == Scale.MINUTES_15.value:
+            usage = round(
+                4 * 1000 * usage
+            )  # this might never be used but for safety, convert to rate
+        else:
+            usage = round(usage, 3)
+        return usage
+
+    def scale_is_energy(self):
+        """Returns True if the scale is an energy unit instead of power (hour and bigger)"""
+        return (
+            self._scale != Scale.MINUTE.value
+            and self._scale != Scale.SECOND.value
+            and self._scale != Scale.MINUTES_15.value
+        )

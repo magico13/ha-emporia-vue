@@ -1,6 +1,6 @@
 """The Emporia Vue integration."""
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 import logging
@@ -40,6 +40,10 @@ PLATFORMS = ["sensor", "switch"]
 
 device_gids = []
 device_information = {}
+last_minute_data = {}
+last_day_data = {}
+last_day_update = None
+
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Emporia Vue component."""
@@ -85,7 +89,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         _LOGGER.error("Could not authenticate with Emporia API")
         return False
 
-    scales_1hr = []
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
         total_channels = 0
@@ -110,7 +113,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            return await update_sensors(vue, [Scale.MINUTE.value])
+            global last_minute_data
+            data = await update_sensors(vue, [Scale.MINUTE.value])
+            # store this, then have the daily sensors pull from it and integrate
+            # then the daily can "true up" hourly (or more frequent) in case it's incorrect
+            if data:
+                last_minute_data = data
+            return data
 
         async def async_update_data_1hr():
             """Fetch data from API endpoint at a 1 hour interval
@@ -118,12 +127,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            return await update_sensors(vue, scales_1hr)
+            return await update_sensors(vue, [Scale.MONTH.value])
 
-        if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
-            scales_1hr.append(Scale.DAY.value)
-        if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
-            scales_1hr.append(Scale.MONTH.value)
+        async def async_update_day_sensors():
+            global last_day_update
+            global last_day_data
+            now = datetime.utcnow()
+            if not last_day_update or (now - last_day_update) > timedelta(minutes=15):
+                _LOGGER.info("Updating day sensors")
+                last_day_update = now
+                last_day_data = await update_sensors(vue, [Scale.DAY.value])
+            else:
+                # integrate the minute data
+                _LOGGER.info("Integrating minute data into day sensors")
+                if last_minute_data:
+                    for id, data in last_minute_data.items():
+                        day_id = id.rsplit("-", 1)[0] + "-" + Scale.DAY.value
+                        last_day_data[day_id]["usage"] += data[
+                            "usage"
+                        ]  # already in kwh
+            return last_day_data
 
         coordinator_1min = None
         if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
@@ -139,7 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             await coordinator_1min.async_config_entry_first_refresh()
             _LOGGER.info(f"1min Update data: {coordinator_1min.data}")
         coordinator_1hr = None
-        if scales_1hr:
+        if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
             coordinator_1hr = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -152,6 +175,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             await coordinator_1hr.async_config_entry_first_refresh()
             _LOGGER.info(f"1hr Update data: {coordinator_1hr.data}")
 
+        coordinator_day_sensor = None
+        if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
+            coordinator_day_sensor = DataUpdateCoordinator(
+                hass,
+                _LOGGER,
+                # Name of the data. For logging purposes.
+                name="sensor",
+                update_method=async_update_day_sensors,
+                # Polling interval. Will only be polled if there are subscribers.
+                update_interval=timedelta(minutes=1),
+            )
+            await coordinator_day_sensor.async_config_entry_first_refresh()
+
     except Exception as err:
         _LOGGER.warn(f"Exception while setting up Emporia Vue. Will retry. {err}")
         raise ConfigEntryNotReady(
@@ -162,6 +198,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         VUE_DATA: vue,
         "coordinator_1min": coordinator_1min,
         "coordinator_1hr": coordinator_1hr,
+        "coordinator_day_sensor": coordinator_day_sensor,
     }
 
     try:
@@ -199,65 +236,31 @@ async def update_sensors(vue, scales):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
-            now = datetime.utcnow()
+            utcnow = datetime.utcnow()
             channels = await loop.run_in_executor(
-                None, vue.get_devices_usage, device_gids, now, scale
+                None, vue.get_devices_usage, device_gids, utcnow, scale
             )
             if not channels:
                 _LOGGER.warn(
                     f"No channels found during update for scale {scale}. Retrying..."
                 )
                 channels = await loop.run_in_executor(
-                    None, vue.get_devices_usage, device_gids, now, scale
+                    None, vue.get_devices_usage, device_gids, utcnow, scale
                 )
             if channels:
-                reset_datetime = get_reset_datetime(scale)
+                reset_datetime = None
                 for channel in channels:
-                    id = "{0}-{1}-{2}".format(
-                        channel.device_gid, channel.channel_num, scale
-                    )
-                    usage = round(channel.usage, 3)
-                    if scale == Scale.MINUTE.value:
-                        usage = round(
-                            60 * 1000 * channel.usage
-                        )  # convert from kwh to w rate
-                    elif scale == Scale.SECOND.value:
-                        usage = round(3600 * 1000 * channel.usage)  # convert to rate
-                    elif scale == Scale.MINUTES_15.value:
-                        usage = round(
-                            4 * 1000 * channel.usage
-                        )  # this might never be used but for safety, convert to rate
-                    info = None
-
-                    if channel.device_gid in device_information:
-                        info = device_information[channel.device_gid]
-                        if channel.channel_num in ["MainsFromGrid", "MainsToGrid"]:
-                            found = False
-                            channel_123 = None
-                            for channel2 in info.channels:
-                                if channel2.channel_num == channel.channel_num:
-                                    found = True
-                                    break
-                                elif channel2.channel_num == "1,2,3":
-                                    channel_123 = channel2
-                            if not found:
-                                _LOGGER.info(
-                                    f"Adding channel for channel {channel.device_gid}-{channel.channel_num}"
-                                )
-                                info.channels.append(
-                                    VueDeviceChannel(
-                                        gid=channel.device_gid,
-                                        name=None,
-                                        channelNum=channel.channel_num,
-                                        channelMultiplier=channel_123.channel_multiplier,
-                                        channelTypeGid=channel_123.channel_type_gid,
-                                    )
-                                )
+                    id = make_channel_id(channel, scale)
+                    info = find_device_info_for_channel(channel)
+                    if scale in [Scale.DAY.value, Scale.MONTH.value]:
+                        epochSeconds = channel.timestamp
+                        timestamp = datetime.fromtimestamp(epochSeconds, timezone.utc)
+                        reset_datetime = timestamp
 
                     data[id] = {
                         "device_gid": channel.device_gid,
                         "channel_num": channel.channel_num,
-                        "usage": usage,
+                        "usage": channel.usage,
                         "scale": scale,
                         "info": info,
                         "reset": reset_datetime,
@@ -271,21 +274,35 @@ async def update_sensors(vue, scales):
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
 
-def get_reset_datetime(scale):
-    if not scale_is_energy(scale):
-        return None  # these are live, not accumulating
-    # kwh measures reset depending on the scale
-    if scale == Scale.DAY.value:
-        # reset at midnight of the current day
-        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    elif scale == Scale.MONTH.value:
-        # reset at midnight of the first of the current month
-        return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+def find_device_info_for_channel(channel):
+    info = None
+    if channel.device_gid in device_information:
+        info = device_information[channel.device_gid]
+        if channel.channel_num in ["MainsFromGrid", "MainsToGrid"]:
+            found = False
+            channel_123 = None
+            for channel2 in info.channels:
+                if channel2.channel_num == channel.channel_num:
+                    found = True
+                    break
+                elif channel2.channel_num == "1,2,3":
+                    channel_123 = channel2
+            if not found:
+                _LOGGER.info(
+                    f"Adding channel for channel {channel.device_gid}-{channel.channel_num}"
+                )
+                info.channels.append(
+                    VueDeviceChannel(
+                        gid=channel.device_gid,
+                        name=None,
+                        channelNum=channel.channel_num,
+                        channelMultiplier=channel_123.channel_multiplier,
+                        channelTypeGid=channel_123.channel_type_gid,
+                    )
+                )
+    return info
 
 
-def scale_is_energy(scale):
-    return (
-        scale != Scale.MINUTE.value
-        and scale != Scale.SECOND.value
-        and scale != Scale.MINUTES_15.value
-    )
+def make_channel_id(channel, scale):
+    """Format the channel id for a channel and scale"""
+    return "{0}-{1}-{2}".format(channel.device_gid, channel.channel_num, scale)
