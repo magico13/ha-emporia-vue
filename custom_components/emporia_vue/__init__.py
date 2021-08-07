@@ -248,14 +248,17 @@ async def update_sensors(vue, scales):
                     None, vue.get_devices_usage, device_gids, utcnow, scale
                 )
             if channels:
-                reset_datetime = None
                 for channel in channels:
+                    reset_datetime = None
                     id = make_channel_id(channel, scale)
                     info = find_device_info_for_channel(channel)
                     if scale in [Scale.DAY.value, Scale.MONTH.value]:
                         epochSeconds = channel.timestamp
-                        timestamp = datetime.fromtimestamp(epochSeconds, timezone.utc)
-                        reset_datetime = timestamp
+                        if epochSeconds:
+                            timestamp = datetime.fromtimestamp(
+                                epochSeconds, timezone.utc
+                            )
+                            reset_datetime = timestamp
 
                     data[id] = {
                         "device_gid": channel.device_gid,
