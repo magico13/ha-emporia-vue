@@ -263,7 +263,7 @@ async def update_sensors(vue, scales):
                     data[id] = {
                         "device_gid": channel.device_gid,
                         "channel_num": channel.channel_num,
-                        "usage": channel.usage,
+                        "usage": fix_usage_sign(channel.channel_num, channel.usage),
                         "scale": scale,
                         "info": info,
                         "reset": reset_datetime,
@@ -309,3 +309,10 @@ def find_device_info_for_channel(channel):
 def make_channel_id(channel, scale):
     """Format the channel id for a channel and scale"""
     return "{0}-{1}-{2}".format(channel.device_gid, channel.channel_num, scale)
+
+
+def fix_usage_sign(channel_num, usage):
+    """If the channel is MainsToGrid we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
+    if usage and channel_num == "MainsToGrid":
+        return -1 * usage
+    return usage
