@@ -73,7 +73,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             raise RuntimeError(
                 f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
             )
-        dName = self._device.name
+        dName = self._device.device_name
         if self._channel.name and self._channel.name != "Main":
             dName = self._channel.name
         self._name = f"Power {dName} {channel_num} {self._scale}"

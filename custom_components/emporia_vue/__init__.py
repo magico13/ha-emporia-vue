@@ -102,6 +102,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         for device in devices:
             if not device.device_gid in device_gids:
                 device_gids.append(device.device_gid)
+                # await loop.run_in_executor(None, vue.populate_device_properties, device)
                 device_information[device.device_gid] = device
             else:
                 device_information[device.device_gid].channels += device.channels
@@ -259,7 +260,7 @@ async def update_sensors(vue, scales):
 
 def recurse_usage_data(usage_devices, scale, data):
     for gid, device in usage_devices.items():
-        for channel_num, channel in device.channels:
+        for channel_num, channel in device.channels.items():
             reset_datetime = None
             id = make_channel_id(channel, scale)
             info = find_device_info_for_channel(channel)
@@ -282,7 +283,7 @@ def find_device_info_for_channel(channel):
     info = None
     if channel.device_gid in device_information:
         info = device_information[channel.device_gid]
-        if channel.channel_num in ["MainsFromGrid", "MainsToGrid"]:
+        if channel.channel_num in ["MainsFromGrid", "MainsToGrid", "Balance"]:
             found = False
             channel_123 = None
             for channel2 in info.channels:
