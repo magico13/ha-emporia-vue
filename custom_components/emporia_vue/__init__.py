@@ -102,7 +102,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         for device in devices:
             if not device.device_gid in device_gids:
                 device_gids.append(device.device_gid)
-                await loop.run_in_executor(None, vue.populate_device_properties, device)
                 device_information[device.device_gid] = device
             else:
                 device_information[device.device_gid].channels += device.channels
@@ -237,37 +236,18 @@ async def update_sensors(vue, scales):
         loop = asyncio.get_event_loop()
         for scale in scales:
             utcnow = datetime.utcnow()
-            channels = await loop.run_in_executor(
-                None, vue.get_devices_usage, device_gids, utcnow, scale
+            usage_dict = await loop.run_in_executor(
+                None, vue.get_device_list_usage, device_gids, utcnow, scale
             )
-            if not channels:
+            if not usage_dict:
                 _LOGGER.warn(
                     f"No channels found during update for scale {scale}. Retrying..."
                 )
-                channels = await loop.run_in_executor(
-                    None, vue.get_devices_usage, device_gids, utcnow, scale
+                usage_dict = await loop.run_in_executor(
+                    None, vue.get_device_list_usage, device_gids, utcnow, scale
                 )
-            if channels:
-                for channel in channels:
-                    reset_datetime = None
-                    id = make_channel_id(channel, scale)
-                    info = find_device_info_for_channel(channel)
-                    if scale in [Scale.DAY.value, Scale.MONTH.value]:
-                        epochSeconds = channel.timestamp
-                        if epochSeconds:
-                            timestamp = datetime.fromtimestamp(
-                                epochSeconds, timezone.utc
-                            )
-                            reset_datetime = timestamp
-
-                    data[id] = {
-                        "device_gid": channel.device_gid,
-                        "channel_num": channel.channel_num,
-                        "usage": fix_usage_sign(channel.channel_num, channel.usage),
-                        "scale": scale,
-                        "info": info,
-                        "reset": reset_datetime,
-                    }
+            if usage_dict:
+                recurse_usage_data(usage_dict, scale, data)
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
 
@@ -275,6 +255,27 @@ async def update_sensors(vue, scales):
     except Exception as err:
         _LOGGER.error(f"Error communicating with Emporia API: {err}")
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
+
+
+def recurse_usage_data(usage_devices, scale, data):
+    for gid, device in usage_devices.items():
+        for channel_num, channel in device.channels:
+            reset_datetime = None
+            id = make_channel_id(channel, scale)
+            info = find_device_info_for_channel(channel)
+            if scale in [Scale.DAY.value, Scale.MONTH.value]:
+                reset_datetime = device.timestamp
+
+            data[id] = {
+                "device_gid": gid,
+                "channel_num": channel_num,
+                "usage": fix_usage_sign(channel_num, channel.usage),
+                "scale": scale,
+                "info": info,
+                "reset": reset_datetime,
+            }
+            if channel.nested_devices:
+                recurse_usage_data(channel.nested_devices, scale, data)
 
 
 def find_device_info_for_channel(channel):
@@ -297,7 +298,7 @@ def find_device_info_for_channel(channel):
                 info.channels.append(
                     VueDeviceChannel(
                         gid=channel.device_gid,
-                        name=None,
+                        name=channel.name,
                         channelNum=channel.channel_num,
                         channelMultiplier=channel_123.channel_multiplier,
                         channelTypeGid=channel_123.channel_type_gid,

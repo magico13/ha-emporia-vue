@@ -3,7 +3,7 @@
   "name": "Emporia Vue",
   "config_flow": true,
   "documentation": "https://github.com/magico13/ha-emporia-vue",
-  "requirements": ["pyemvue==0.12.4"],
+  "requirements": ["pyemvue==0.14.0"],
   "ssdp": [],
   "zeroconf": [],
   "homekit": {},
