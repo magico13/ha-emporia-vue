@@ -143,9 +143,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 if last_minute_data:
                     for id, data in last_minute_data.items():
                         day_id = id.rsplit("-", 1)[0] + "-" + Scale.DAY.value
-                        last_day_data[day_id]["usage"] += data[
-                            "usage"
-                        ]  # already in kwh
+                        if (
+                            data
+                            and last_day_data
+                            and last_day_data[day_id]
+                            and last_day_data[day_id]["usage"] is not None
+                        ):
+                            last_day_data[day_id]["usage"] += data[
+                                "usage"
+                            ]  # already in kwh
             return last_day_data
 
         coordinator_1min = None
@@ -280,23 +286,28 @@ def recurse_usage_data(usage_devices, scale, data):
 
 
 def find_device_info_for_channel(channel):
-    info = None
+    device_info = None
     if channel.device_gid in device_information:
-        info = device_information[channel.device_gid]
-        if channel.channel_num in ["MainsFromGrid", "MainsToGrid", "Balance"]:
+        device_info = device_information[channel.device_gid]
+        if channel.channel_num in [
+            "MainsFromGrid",
+            "MainsToGrid",
+            "Balance",
+            "TotalUsage",
+        ]:
             found = False
             channel_123 = None
-            for channel2 in info.channels:
-                if channel2.channel_num == channel.channel_num:
+            for device_channel in device_info.channels:
+                if device_channel.channel_num == channel.channel_num:
                     found = True
                     break
-                elif channel2.channel_num == "1,2,3":
-                    channel_123 = channel2
+                elif device_channel.channel_num == "1,2,3":
+                    channel_123 = device_channel
             if not found:
                 _LOGGER.info(
                     f"Adding channel for channel {channel.device_gid}-{channel.channel_num}"
                 )
-                info.channels.append(
+                device_info.channels.append(
                     VueDeviceChannel(
                         gid=channel.device_gid,
                         name=channel.name,
@@ -305,7 +316,7 @@ def find_device_info_for_channel(channel):
                         channelTypeGid=channel_123.channel_type_gid,
                     )
                 )
-    return info
+    return device_info
 
 
 def make_channel_id(channel, scale):
