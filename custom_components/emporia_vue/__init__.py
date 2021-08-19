@@ -267,6 +267,8 @@ async def update_sensors(vue, scales):
 def recurse_usage_data(usage_devices, scale, data):
     for gid, device in usage_devices.items():
         for channel_num, channel in device.channels.items():
+            if not channel:
+                continue
             reset_datetime = None
             id = make_channel_id(channel, scale)
             info = find_device_info_for_channel(channel)
@@ -328,4 +330,6 @@ def fix_usage_sign(channel_num, usage):
     """If the channel is MainsToGrid we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
     if usage and channel_num == "MainsToGrid":
         return -1 * usage
+    elif not usage:
+        usage = 0
     return usage
