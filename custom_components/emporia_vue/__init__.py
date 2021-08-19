@@ -132,7 +132,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         async def async_update_day_sensors():
             global last_day_update
             global last_day_data
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             if not last_day_update or (now - last_day_update) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
                 last_day_update = now
@@ -242,7 +242,7 @@ async def update_sensors(vue, scales):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
-            utcnow = datetime.utcnow()
+            utcnow = datetime.now(timezone.utc)
             usage_dict = await loop.run_in_executor(
                 None, vue.get_device_list_usage, device_gids, utcnow, scale
             )
