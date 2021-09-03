@@ -9,5 +9,6 @@
   "homekit": {},
   "dependencies": [],
   "codeowners": ["@magico13"],
-  "version": "0.6.6"
+  "iot_class": "cloud_polling",
+  "version": "0.7.0"
 }

@@ -327,9 +327,9 @@ def make_channel_id(channel, scale):
 
 
 def fix_usage_sign(channel_num, usage):
-    """If the channel is MainsToGrid we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
-    if usage and channel_num == "MainsToGrid":
-        return -1 * usage
+    """If the channel is not '1,2,3' or 'Balance' we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
+    if usage and channel_num not in ["1,2,3", "Balance"]:
+        return abs(usage)
     elif not usage:
         usage = 0
     return usage

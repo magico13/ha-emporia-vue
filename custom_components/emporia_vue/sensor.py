@@ -74,9 +74,9 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
                 f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
             )
         dName = self._device.device_name
-        if self._channel.name and self._channel.name != "Main":
+        if self._channel.name and self._channel.name not in ["Main", "Balance"]:
             dName = self._channel.name
-        self._name = f"Power {dName} {channel_num} {self._scale}"
+        self._name = f"{dName} {channel_num} {self._scale}"
         self._iskwh = self.scale_is_energy()
 
     @property
