@@ -1,5 +1,5 @@
 """Platform for sensor integration."""
-from homeassistant.components.sensor import STATE_CLASS_TOTAL_INCREASING, SensorEntity
+from homeassistant.components.sensor import STATE_CLASS_TOTAL_INCREASING, STATE_CLASS_MEASUREMENT, SensorEntity
 import logging
 
 from homeassistant.const import (
@@ -109,7 +109,10 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
     @property
     def state_class(self):
         """Type of state."""
-        return STATE_CLASS_TOTAL_INCREASING
+        if self._iskwh:
+            return STATE_CLASS_TOTAL_INCREASING
+        else:
+            return STATE_CLASS_MEASUREMENT
 
     @property
     def last_reset(self):
