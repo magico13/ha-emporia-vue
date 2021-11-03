@@ -10,7 +10,7 @@ from pyemvue.enums import Scale
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
@@ -55,7 +55,7 @@ async def async_setup(hass: HomeAssistant, config: dict):
     hass.async_create_task(
         hass.config_entries.flow.async_init(
             DOMAIN,
-            context={},
+            context={"source": SOURCE_IMPORT},
             data={
                 CONF_EMAIL: conf[CONF_EMAIL],
                 CONF_PASSWORD: conf[CONF_PASSWORD],
