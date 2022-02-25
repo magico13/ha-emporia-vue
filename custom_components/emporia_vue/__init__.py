@@ -146,7 +146,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         if (
                             data
                             and last_day_data
+                            and day_id in last_day_data
                             and last_day_data[day_id]
+                            and "usage" in last_day_data[day_id]
                             and last_day_data[day_id]["usage"] is not None
                         ):
                             last_day_data[day_id]["usage"] += data[

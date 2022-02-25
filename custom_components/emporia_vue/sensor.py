@@ -1,5 +1,9 @@
 """Platform for sensor integration."""
-from homeassistant.components.sensor import STATE_CLASS_TOTAL_INCREASING, STATE_CLASS_MEASUREMENT, SensorEntity
+from homeassistant.components.sensor import (
+    STATE_CLASS_TOTAL_INCREASING,
+    STATE_CLASS_MEASUREMENT,
+    SensorEntity,
+)
 import logging
 
 from homeassistant.const import (
@@ -144,6 +148,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             "name": dName,
             "model": self._device.model,
             "sw_version": self._device.firmware,
+            "manufacturer": "Emporia"
             # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
         }
 

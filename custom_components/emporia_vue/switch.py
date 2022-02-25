@@ -19,7 +19,8 @@ from pyemvue.device import OutletDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-device_information = {} # data is the populated device objects
+device_information = {}  # data is the populated device objects
+
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up the sensor platform."""
@@ -49,13 +50,13 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                     data[outlet.device_gid] = outlet
             return data
         except Exception as err:
-            raise UpdateFailed(f'Error communicating with Emporia API: {err}')
+            raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         # Name of the data. For logging purposes.
-        name='switch',
+        name="switch",
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
         update_interval=timedelta(minutes=5),
@@ -64,8 +65,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     await coordinator.async_refresh()
 
     async_add_entities(
-        EmporiaOutletSwitch(coordinator, vue, id) for idx, id in enumerate(coordinator.data)
+        EmporiaOutletSwitch(coordinator, vue, id)
+        for idx, id in enumerate(coordinator.data)
     )
+
 
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of an Emporia Smart Outlet state"""
@@ -73,11 +76,11 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, vue, id):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
-        #self._state = coordinator.data[index]['usage']
+        # self._state = coordinator.data[index]['usage']
         self._vue = vue
         self._device_gid = id
         self._device = device_information[id]
-        self._name = f'Switch {self._device.device_name}'
+        self._name = f"Switch {self._device.device_name}"
 
     @property
     def name(self):
@@ -107,29 +110,37 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs):
         """Turn the switch on."""
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._vue.update_outlet, self.coordinator.data[self._device_gid], True)
+        await loop.run_in_executor(
+            None, self._vue.update_outlet, self.coordinator.data[self._device_gid], True
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs):
         """Turn the switch off."""
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._vue.update_outlet, self.coordinator.data[self._device_gid], False)
+        await loop.run_in_executor(
+            None,
+            self._vue.update_outlet,
+            self.coordinator.data[self._device_gid],
+            False,
+        )
         await self.coordinator.async_request_refresh()
 
     @property
     def unique_id(self):
         """Unique ID for the switch"""
-        return f'switch.emporia_vue.{self._device_gid}'
+        return f"switch.emporia_vue.{self._device_gid}"
 
     @property
     def device_info(self):
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, '{0}-1,2,3'.format(self._device_gid))
+                (DOMAIN, "{0}-1,2,3".format(self._device_gid))
             },
-            "name": self._device.device_name+'-1,2,3',
+            "name": self._device.device_name + "-1,2,3",
             "model": self._device.model,
             "sw_version": self._device.firmware,
-            #"via_device": self._device.device_gid # might be able to map the extender, nested outlets
+            "manufacturer": "Emporia"
+            # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
         }
