@@ -142,6 +142,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
                 )
             },
             "name": dName,
+            "manufacturer": "Emporia",
             "model": self._device.model,
             "sw_version": self._device.firmware,
             # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
