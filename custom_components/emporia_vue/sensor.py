@@ -1,6 +1,6 @@
 """Platform for sensor integration."""
 from homeassistant.components.sensor import (
-    STATE_CLASS_TOTAL_INCREASING,
+    STATE_CLASS_TOTAL,
     STATE_CLASS_MEASUREMENT,
     SensorEntity,
 )
@@ -56,14 +56,14 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Vue Sensor's current power."""
 
-    def __init__(self, coordinator, id):
+    def __init__(self, coordinator, identifier):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
-        self._id = id
-        self._scale = coordinator.data[id]["scale"]
-        device_gid = coordinator.data[id]["device_gid"]
-        channel_num = coordinator.data[id]["channel_num"]
-        self._device = coordinator.data[id]["info"]
+        self._id = identifier
+        self._scale = coordinator.data[identifier]["scale"]
+        device_gid = coordinator.data[identifier]["device_gid"]
+        channel_num = coordinator.data[identifier]["channel_num"]
+        self._device = coordinator.data[identifier]["info"]
         self._channel = None
         if self._device is not None:
             for channel in self._device.channels:
@@ -71,52 +71,41 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
                     self._channel = channel
                     break
         if self._channel is None:
-            _LOGGER.warn(
-                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
+            _LOGGER.warning(
+                "No channel found for device_gid %s and channel_num %s",
+                device_gid,
+                channel_num,
             )
             raise RuntimeError(
                 f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
             )
-        dName = self._device.device_name
-        if self._channel.name and self._channel.name not in ["Main", "Balance"]:
-            dName = self._channel.name
-        self._name = f"{dName} {channel_num} {self._scale}"
+        device_name = self._device.device_name
+        if self._channel.name and self._channel.name not in [
+            "Main",
+            "Balance",
+            "TotalUsage",
+            "MainsToGrid",
+            "MainsFromGrid",
+        ]:
+            device_name = self._channel.name
+        self._name = f"{device_name} {channel_num} {self._scale}"
         self._iskwh = self.scale_is_energy()
 
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+        self._attr_name = self._name
+        if self._iskwh:
+            self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
+            self._attr_device_class = DEVICE_CLASS_ENERGY
+            self._attr_state_class = STATE_CLASS_TOTAL
+        else:
+            self._attr_native_unit_of_measurement = POWER_WATT
+            self._attr_device_class = DEVICE_CLASS_POWER
+            self._attr_state_class = STATE_CLASS_MEASUREMENT
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         usage = self.coordinator.data[self._id]["usage"]
         return self.scale_usage(usage)
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        if self._iskwh:
-            return ENERGY_KILO_WATT_HOUR
-        else:
-            return POWER_WATT
-
-    @property
-    def device_class(self):
-        """The type of sensor"""
-        if self._iskwh:
-            return DEVICE_CLASS_ENERGY
-        else:
-            return DEVICE_CLASS_POWER
-
-    @property
-    def state_class(self):
-        """Type of state."""
-        if self._iskwh:
-            return STATE_CLASS_TOTAL_INCREASING
-        else:
-            return STATE_CLASS_MEASUREMENT
 
     @property
     def last_reset(self):
@@ -128,13 +117,11 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         """Unique ID for the sensor"""
         if self._scale == Scale.MINUTE.value:
             return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
-        else:
-            return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
+        return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
 
     @property
     def device_info(self):
-        dName = self._channel.name or self._device.device_name
-
+        device_name = self._channel.name or self._device.device_name
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
@@ -145,7 +132,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
                     ),
                 )
             },
-            "name": dName,
+            "name": device_name,
             "model": self._device.model,
             "sw_version": self._device.firmware,
             "manufacturer": "Emporia"
@@ -168,8 +155,8 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
 
     def scale_is_energy(self):
         """Returns True if the scale is an energy unit instead of power (hour and bigger)"""
-        return (
-            self._scale != Scale.MINUTE.value
-            and self._scale != Scale.SECOND.value
-            and self._scale != Scale.MINUTES_15.value
+        return self._scale not in (
+            Scale.MINUTE.value,
+            Scale.SECOND.value,
+            Scale.MINUTES_15.value,
         )

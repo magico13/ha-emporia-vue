@@ -1,9 +1,9 @@
 """The Emporia Vue integration."""
 import asyncio
 from datetime import datetime, timedelta, timezone
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
+import dateutil
 import logging
+
 from pyemvue import PyEmVue
 from pyemvue.device import VueDeviceChannel
 from pyemvue.enums import Scale
@@ -11,11 +11,11 @@ from pyemvue.enums import Scale
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, VUE_DATA, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
@@ -141,8 +141,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
                 if last_minute_data:
-                    for id, data in last_minute_data.items():
-                        day_id = id.rsplit("-", 1)[0] + "-" + Scale.DAY.value
+                    for identifier, data in last_minute_data.items():
+                        day_id = identifier.rsplit("-", 1)[0] + "-" + Scale.DAY.value
                         if (
                             data
                             and last_day_data
@@ -168,7 +168,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 update_interval=timedelta(minutes=1),
             )
             await coordinator_1min.async_config_entry_first_refresh()
-            _LOGGER.info(f"1min Update data: {coordinator_1min.data}")
+            _LOGGER.info("1min Update data: %s", coordinator_1min.data)
         coordinator_1hr = None
         if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
             coordinator_1hr = DataUpdateCoordinator(
@@ -197,7 +197,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             await coordinator_day_sensor.async_config_entry_first_refresh()
 
     except Exception as err:
-        _LOGGER.warn(f"Exception while setting up Emporia Vue. Will retry. {err}")
+        _LOGGER.warning("Exception while setting up Emporia Vue. Will retry. %s", err)
         raise ConfigEntryNotReady(
             f"Exception while setting up Emporia Vue. Will retry. {err}"
         )
@@ -215,7 +215,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 hass.config_entries.async_forward_entry_setup(entry, component)
             )
     except Exception as err:
-        _LOGGER.warn(f"Error setting up platforms: {err}")
+        _LOGGER.warning("Error setting up platforms: %s", err)
         raise ConfigEntryNotReady(f"Error setting up platforms: {err}")
 
     return True
@@ -249,8 +249,8 @@ async def update_sensors(vue, scales):
                 None, vue.get_device_list_usage, device_gids, utcnow, scale
             )
             if not usage_dict:
-                _LOGGER.warn(
-                    f"No channels found during update for scale {scale}. Retrying..."
+                _LOGGER.warning(
+                    "No channels found during update for scale %s. Retrying", scale
                 )
                 usage_dict = await loop.run_in_executor(
                     None, vue.get_device_list_usage, device_gids, utcnow, scale
@@ -262,7 +262,7 @@ async def update_sensors(vue, scales):
 
         return data
     except Exception as err:
-        _LOGGER.error(f"Error communicating with Emporia API: {err}")
+        _LOGGER.error("Error communicating with Emporia API: %s", err)
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
 
@@ -272,12 +272,25 @@ def recurse_usage_data(usage_devices, scale, data):
             if not channel:
                 continue
             reset_datetime = None
-            id = make_channel_id(channel, scale)
+            identifier = make_channel_id(channel, scale)
             info = find_device_info_for_channel(channel)
             if scale in [Scale.DAY.value, Scale.MONTH.value]:
-                reset_datetime = device.timestamp
+                # We need to know when the value reset
+                # For day, that should be midnight local time, but we need to use the timestamp returned to us
+                # for month, that should be midnight of the reset day they specify in the app (but could we keep resetting daily?)
 
-            data[id] = {
+                # in either case, convert the given timestamp to local time first
+
+                local_time = change_time_to_local(device.timestamp, info.time_zone)
+                # take the timestamp, convert to midnight
+                reset_datetime = local_time.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                _LOGGER.info(
+                    "Reset time for %s is %s", identifier, reset_datetime.isoformat()
+                )
+
+            data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
                 "usage": fix_usage_sign(channel_num, channel.usage),
@@ -305,11 +318,13 @@ def find_device_info_for_channel(channel):
                 if device_channel.channel_num == channel.channel_num:
                     found = True
                     break
-                elif device_channel.channel_num == "1,2,3":
+                if device_channel.channel_num == "1,2,3":
                     channel_123 = device_channel
             if not found:
                 _LOGGER.info(
-                    f"Adding channel for channel {channel.device_gid}-{channel.channel_num}"
+                    "Adding channel for channel %s-%s",
+                    channel.device_gid,
+                    channel.channel_num,
                 )
                 device_info.channels.append(
                     VueDeviceChannel(
@@ -332,6 +347,15 @@ def fix_usage_sign(channel_num, usage):
     """If the channel is not '1,2,3' or 'Balance' we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
     if usage and channel_num not in ["1,2,3", "Balance"]:
         return abs(usage)
-    elif not usage:
+    if not usage:
         usage = 0
     return usage
+
+
+def change_time_to_local(time: datetime, tz_string: str):
+    """Change the datetime to the provided timezone, if not already."""
+    tz_info = dateutil.tz.gettz(tz_string)
+    if not time.tzinfo or time.tzinfo.utcoffset(time) is None:
+        # unaware, assume it's already utc
+        time = time.replace(tzinfo=datetime.timezone.utc)
+    return time.astimezone(tz_info)
