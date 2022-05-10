@@ -73,13 +73,13 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of an Emporia Smart Outlet state"""
 
-    def __init__(self, coordinator, vue, id):
+    def __init__(self, coordinator, vue, gid):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         # self._state = coordinator.data[index]['usage']
         self._vue = vue
-        self._device_gid = id
-        self._device = device_information[id]
+        self._device_gid = gid
+        self._device = device_information[gid]
         self._name = f"Switch {self._device.device_name}"
 
     @property
@@ -91,21 +91,6 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     def is_on(self):
         """Return the state of the switch."""
         return self.coordinator.data[self._device_gid].outlet_on
-
-    # @property
-    # def current_power_w(self):
-    #     """Return the current power consumption of the switch."""
-    #     return None # so this one is sorta funny because there are separate energy sensors
-
-    # @property
-    # def today_energy_kwh(self):
-    #     """Return the power consumption today for the switch."""
-    #     return None # so this one is sorta funny because there are separate energy sensors
-
-    # @property
-    # def is_standby(self):
-    #     """Indicate if the device connected to the switch is currently in standby."""
-    #     return None # Could apply a semi-arbitrary limit of like 5 watts for this
 
     async def async_turn_on(self, **kwargs):
         """Turn the switch on."""

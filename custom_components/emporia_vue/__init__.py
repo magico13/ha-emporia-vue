@@ -286,6 +286,18 @@ def recurse_usage_data(usage_devices, scale, data):
                 reset_datetime = local_time.replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
+                if scale is Scale.MONTH.value:
+                    # Month should use the last billing_cycle_start_day of either this or last month
+                    reset_day = info.billing_cycle_start_day
+                    if reset_datetime.day >= reset_day:
+                        # we're past the reset day for this month, just set the day on the local time
+                        reset_datetime = reset_datetime.replace(day=reset_day)
+                    else:
+                        # we're in the start of a month, roll back to the reset_day of last month
+                        reset_datetime = reset_datetime.replace(
+                            day=reset_day
+                        ) - dateutil.relativedelta.relativedelta(months=1)
+
                 _LOGGER.info(
                     "Reset time for %s is %s", identifier, reset_datetime.isoformat()
                 )
