@@ -3,7 +3,6 @@ from datetime import timedelta
 import logging
 
 import asyncio
-from tkinter import UNITS
 import async_timeout
 from config.custom_components.emporia_vue.charger_entity import EmporiaChargerEntity
 
