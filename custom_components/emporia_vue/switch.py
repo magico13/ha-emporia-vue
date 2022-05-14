@@ -4,7 +4,6 @@ import logging
 
 import asyncio
 import async_timeout
-from config.custom_components.emporia_vue.charger_entity import EmporiaChargerEntity
 
 from homeassistant.components.switch import DEVICE_CLASS_OUTLET, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -16,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
 
 from pyemvue import pyemvue
