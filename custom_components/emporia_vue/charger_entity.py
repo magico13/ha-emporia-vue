@@ -1,49 +1,62 @@
 import logging
 from datetime import datetime
-from typing import Callable, List
+from typing import Any, Mapping
 
 from homeassistant.const import ENERGY_WATT_HOUR, POWER_WATT
 from homeassistant.helpers import device_registry, entity_registry
 from homeassistant.helpers.entity import DeviceInfo, Entity
 from homeassistant.helpers.entity_registry import async_entries_for_device
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+)
 from homeassistant.util import dt
 
 from .const import DOMAIN, VUE_DATA
 
 from pyemvue import pyemvue
-from pyemvue.device import VueDevice, ChargerDevice
+from pyemvue.device import VueDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class EmporiaChargerEntity(Entity):
+class EmporiaChargerEntity(CoordinatorEntity):
     """Emporia Charger Entity"""
 
     def __init__(
         self,
-        data,
+        coordinator,
+        vue: pyemvue.PyEmVue,
         device: VueDevice,
         units: str,
         device_class: str,
         enabled_default=True,
     ):
+        super().__init__(coordinator)
+        self._coordinator = coordinator
         self._device = device
-        self.data = data
+        self._vue = vue
         self._enabled_default = enabled_default
-        self._units = units
-        self._device_class = device_class
 
-        self._charger = device.ev_charger
-        self._name = device.device_name
+        self._attr_unit_of_measurement = units
+        self._attr_device_class = device_class
+        self._attr_name = device.device_name
 
     @property
     def entity_registry_enabled_default(self):
         return self._enabled_default
 
     @property
-    def name(self):
-        """Name of the entity."""
-        return self._name
+    def extra_state_attributes(self) -> Mapping[str, Any]:
+        data = self._coordinator.data[self._device.device_gid]
+        if data:
+            return {
+                "charging_rate": data.charging_rate,
+                "max_charging_rate": data.max_charging_rate,
+                "status": data.status,
+                "message": data.message,
+                "fault_text": data.fault_text,
+            }
+        return None
 
     @property
     def unique_id(self) -> str:
@@ -54,29 +67,14 @@ class EmporiaChargerEntity(Entity):
     def device_info(self):
         """Return the device information."""
         return {
-            "identifiers": (DOMAIN, str(self._device.device_gid)),
-            "name": self._device.device_name,
+            "identifiers": {(DOMAIN, "{0}-1,2,3".format(self._device.device_gid))},
+            "name": self._device.device_name + "-1,2,3",
             "model": self._device.model,
             "sw_version": self._device.firmware,
             "manufacturer": "Emporia",
         }
 
     @property
-    def native_unit_of_measurement(self):
-        """Return the native unit of measurement of this entity, if any."""
-        return self._units
-
-    @property
     def available(self):
         """Return True if entity is available."""
-        return self._device.connected
-
-    @property
-    def device_class(self):
-        """Device class of sensor."""
-        return self._device_class
-
-    @property
-    def should_poll(self):
-        """No polling needed."""
-        return False
+        return self._device

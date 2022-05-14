@@ -3,9 +3,14 @@ from datetime import timedelta
 import logging
 
 import asyncio
+from tkinter import UNITS
 import async_timeout
+from config.custom_components.emporia_vue.charger_entity import EmporiaChargerEntity
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import DEVICE_CLASS_OUTLET, SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -15,14 +20,18 @@ from homeassistant.helpers.update_coordinator import (
 from .const import DOMAIN, VUE_DATA
 
 from pyemvue import pyemvue
-from pyemvue.device import OutletDevice
+from pyemvue.device import OutletDevice, ChargerDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 device_information = {}  # data is the populated device objects
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+):
     """Set up the sensor platform."""
     vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
 
@@ -30,6 +39,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     devices = await loop.run_in_executor(None, vue.get_devices)
     for device in devices:
         if device.outlet is not None:
+            await loop.run_in_executor(None, vue.populate_device_properties, device)
+            device_information[device.device_gid] = device
+        elif device.ev_charger is not None:
             await loop.run_in_executor(None, vue.populate_device_properties, device)
             device_information[device.device_gid] = device
 
@@ -44,10 +56,15 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             # handled by the data update coordinator.
             data = {}
             loop = asyncio.get_event_loop()
+            # TODO: Swap from separate get_outlets/get_chargers to a single get_status
             outlets = await loop.run_in_executor(None, vue.get_outlets)
             if outlets:
                 for outlet in outlets:
                     data[outlet.device_gid] = outlet
+            chargers = await loop.run_in_executor(None, vue.get_chargers)
+            if chargers:
+                for charger in chargers:
+                    data[charger.device_gid] = charger
             return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Emporia API: {err}")
@@ -59,15 +76,23 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         name="switch",
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(minutes=5),
+        update_interval=timedelta(minutes=1),
     )
 
     await coordinator.async_refresh()
 
-    async_add_entities(
-        EmporiaOutletSwitch(coordinator, vue, id)
-        for idx, id in enumerate(coordinator.data)
-    )
+    switches = []
+    for _, gid in enumerate(coordinator.data):
+        if device_information[gid].outlet:
+            switches.append(EmporiaOutletSwitch(coordinator, vue, gid))
+        elif device_information[gid].ev_charger:
+            switches.append(
+                EmporiaChargerSwitch(
+                    coordinator, vue, device_information[gid], None, DEVICE_CLASS_OUTLET
+                )
+            )
+
+    async_add_entities(switches)
 
 
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
@@ -81,6 +106,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
         self._device_gid = gid
         self._device = device_information[gid]
         self._name = f"Switch {self._device.device_name}"
+        self._attr_device_class = DEVICE_CLASS_OUTLET
 
     @property
     def name(self):
@@ -129,3 +155,34 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
             "manufacturer": "Emporia"
             # "via_device": self._device.device_gid # might be able to map the extender, nested outlets
         }
+
+
+class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):
+    """Representation of an Emporia Charger switch state"""
+
+    @property
+    def is_on(self):
+        """Return the state of the switch."""
+        return self.coordinator.data[self._device.device_gid].charger_on
+
+    async def async_turn_on(self, **kwargs):
+        """Turn the charger on."""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            self._vue.update_charger,
+            self._coordinator.data[self._device.device_gid],
+            True,
+        )
+        await self._coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs):
+        """Turn the charger off."""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            self._vue.update_charger,
+            self._coordinator.data[self._device.device_gid],
+            False,
+        )
+        await self._coordinator.async_request_refresh()
