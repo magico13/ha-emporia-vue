@@ -7,14 +7,16 @@ import logging
 from pyemvue import PyEmVue
 from pyemvue.device import VueDeviceChannel
 from pyemvue.enums import Scale
+import re
 
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, VUE_DATA, ENABLE_1M, ENABLE_1D, ENABLE_1MON
@@ -196,6 +198,68 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
             await coordinator_day_sensor.async_config_entry_first_refresh()
 
+        # Setup custom services
+        async def handle_set_charger_current(call):
+            """Handle setting the EV Charger current"""
+            _LOGGER.debug(
+                "executing set_charger_current: %s %s",
+                str(call.service),
+                str(call.data),
+            )
+            current = call.data.get("current")
+            device_id = call.data.get("device_id", None)
+            entity_id = call.data.get("entity_id", None)
+
+            charger_entity = None
+            if device_id:
+                entity_registry = er.async_get(hass)
+                entities = er.async_entries_for_device(entity_registry, device_id[0])
+                for entity in entities:
+                    _LOGGER.info("Entity is %s", str(entity))
+                    if entity.entity_id.startswith("switch"):
+                        charger_entity = entity
+                        break
+                if not charger_entity:
+                    charger_entity = entities[0]
+            elif entity_id:
+                entity_registry = er.async_get(hass)
+                charger_entity = entity_registry.async_get(entity_id[0])
+            else:
+                raise HomeAssistantError("Target device or Entity required.")
+
+            unique_entity_id = charger_entity.unique_id
+            gid_match = re.search(r"\d+", unique_entity_id)
+            if not gid_match:
+                raise HomeAssistantError(
+                    f"Could not find device gid from unique id {unique_entity_id}"
+                )
+
+            charger_gid = int(gid_match.group(0))
+            if (
+                charger_gid not in device_information
+                or not device_information[charger_gid].ev_charger
+            ):
+                raise HomeAssistantError(
+                    f"Set Charging Current called on invalid device with entity id {charger_entity.entity_id} (unique id {unique_entity_id})"
+                )
+
+            charger_info = device_information[charger_gid]
+            # Scale the current to a minimum of 6 amps and max of the circuit max
+            current = max(6, current)
+            current = min(current, charger_info.ev_charger.max_charging_rate)
+            _LOGGER.info(
+                "Setting charger %s to current of %d amps", charger_gid, current
+            )
+
+            updated_charger = await loop.run_in_executor(
+                None, vue.update_charger, charger_info.ev_charger, None, current
+            )
+            device_information[charger_gid].ev_charger = updated_charger
+
+        hass.services.async_register(
+            DOMAIN, "set_charger_current", handle_set_charger_current
+        )
+
     except Exception as err:
         _LOGGER.warning("Exception while setting up Emporia Vue. Will retry. %s", err)
         raise ConfigEntryNotReady(
@@ -297,10 +361,6 @@ def recurse_usage_data(usage_devices, scale, data):
                         reset_datetime = reset_datetime.replace(
                             day=reset_day
                         ) - dateutil.relativedelta.relativedelta(months=1)
-
-                _LOGGER.info(
-                    "Reset time for %s is %s", identifier, reset_datetime.isoformat()
-                )
 
             data[identifier] = {
                 "device_gid": gid,

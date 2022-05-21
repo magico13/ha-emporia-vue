@@ -1,17 +1,11 @@
 import logging
-from datetime import datetime
 from typing import Any, Mapping
 
-from homeassistant.const import ENERGY_WATT_HOUR, POWER_WATT
-from homeassistant.helpers import device_registry, entity_registry
-from homeassistant.helpers.entity import DeviceInfo, Entity
-from homeassistant.helpers.entity_registry import async_entries_for_device
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
 )
-from homeassistant.util import dt
 
-from .const import DOMAIN, VUE_DATA
+from .const import DOMAIN
 
 from pyemvue import pyemvue
 from pyemvue.device import VueDevice

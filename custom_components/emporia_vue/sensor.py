@@ -1,14 +1,12 @@
 """Platform for sensor integration."""
 from homeassistant.components.sensor import (
-    STATE_CLASS_TOTAL,
-    STATE_CLASS_MEASUREMENT,
+    SensorStateClass,
+    SensorDeviceClass,
     SensorEntity,
 )
 import logging
 
 from homeassistant.const import (
-    DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_POWER,
     POWER_WATT,
     ENERGY_KILO_WATT_HOUR,
 )
@@ -94,12 +92,12 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = self._name
         if self._iskwh:
             self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
-            self._attr_device_class = DEVICE_CLASS_ENERGY
-            self._attr_state_class = STATE_CLASS_TOTAL
+            self._attr_device_class = SensorDeviceClass.ENERGY
+            self._attr_state_class = SensorStateClass.TOTAL
         else:
             self._attr_native_unit_of_measurement = POWER_WATT
-            self._attr_device_class = DEVICE_CLASS_POWER
-            self._attr_state_class = STATE_CLASS_MEASUREMENT
+            self._attr_device_class = SensorDeviceClass.POWER
+            self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self):

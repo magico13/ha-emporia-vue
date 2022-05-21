@@ -1,11 +1,12 @@
 """Platform for switch integration."""
+import asyncio
 from datetime import timedelta
 import logging
 
-import asyncio
-import async_timeout
-
-from homeassistant.components.switch import DEVICE_CLASS_OUTLET, SwitchEntity
+from homeassistant.components.switch import (
+    SwitchDeviceClass,
+    SwitchEntity,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -17,9 +18,6 @@ from homeassistant.helpers.update_coordinator import (
 
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
-
-from pyemvue import pyemvue
-from pyemvue.device import OutletDevice, ChargerDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,7 +85,11 @@ async def async_setup_entry(
         elif device_information[gid].ev_charger:
             switches.append(
                 EmporiaChargerSwitch(
-                    coordinator, vue, device_information[gid], None, DEVICE_CLASS_OUTLET
+                    coordinator,
+                    vue,
+                    device_information[gid],
+                    None,
+                    SwitchDeviceClass.OUTLET,
                 )
             )
 
@@ -105,7 +107,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
         self._device_gid = gid
         self._device = device_information[gid]
         self._name = f"Switch {self._device.device_name}"
-        self._attr_device_class = DEVICE_CLASS_OUTLET
+        self._attr_device_class = SwitchDeviceClass.OUTLET
 
     @property
     def name(self):
