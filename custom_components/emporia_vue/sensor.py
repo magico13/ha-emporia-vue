@@ -102,13 +102,17 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the state of the sensor."""
-        usage = self.coordinator.data[self._id]["usage"]
-        return self.scale_usage(usage)
+        if self._id in self.coordinator.data:
+            usage = self.coordinator.data[self._id]["usage"]
+            return self.scale_usage(usage)
+        return None
 
     @property
     def last_reset(self):
         """The time when the daily/monthly sensor was reset. Midnight local time."""
-        return self.coordinator.data[self._id]["reset"]
+        if self._id in self.coordinator.data:
+            return self.coordinator.data[self._id]["reset"]
+        return None
 
     @property
     def unique_id(self):
