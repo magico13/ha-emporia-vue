@@ -16,12 +16,14 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
+
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
 
 _LOGGER = logging.getLogger(__name__)
 
-device_information = {}  # data is the populated device objects
+device_information: dict[int, VueDevice] = {}  # data is the populated device objects
 
 
 async def async_setup_entry(
@@ -33,7 +35,7 @@ async def async_setup_entry(
     vue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
 
     loop = asyncio.get_event_loop()
-    devices = await loop.run_in_executor(None, vue.get_devices)
+    devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
     for device in devices:
         if device.outlet is not None:
             await loop.run_in_executor(None, vue.populate_device_properties, device)
@@ -53,12 +55,14 @@ async def async_setup_entry(
             # handled by the data update coordinator.
             data = {}
             loop = asyncio.get_event_loop()
-            # TODO: Swap from separate get_outlets/get_chargers to a single get_status
-            outlets = await loop.run_in_executor(None, vue.get_outlets)
+            outlets: list[OutletDevice]
+            chargers: list[ChargerDevice]
+            (outlets, chargers) = await loop.run_in_executor(
+                None, vue.get_devices_status
+            )
             if outlets:
                 for outlet in outlets:
                     data[outlet.device_gid] = outlet
-            chargers = await loop.run_in_executor(None, vue.get_chargers)
             if chargers:
                 for charger in chargers:
                     data[charger.device_gid] = charger
