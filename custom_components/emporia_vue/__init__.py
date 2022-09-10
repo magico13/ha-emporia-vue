@@ -1,11 +1,17 @@
 """The Emporia Vue integration."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any
 import dateutil
 import logging
 
 from pyemvue import PyEmVue
-from pyemvue.device import VueDeviceChannel
+from pyemvue.device import (
+    VueDevice,
+    VueDeviceChannel,
+    VueUsageDevice,
+    VueDeviceChannelUsage,
+)
 from pyemvue.enums import Scale
 import re
 
@@ -40,11 +46,11 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "switch"]
 
-device_gids = []
-device_information = {}
-last_minute_data = {}
-last_day_data = {}
-last_day_update = None
+DEVICE_GIDS: list[int] = []
+DEVICE_INFORMATION: dict[int, VueDevice] = {}
+LAST_MINUTE_DATA: dict[str, Any] = {}
+LAST_DAY_DATA: dict[str, Any] = {}
+LAST_DAY_UPDATE: datetime = None
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -72,10 +78,10 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up Emporia Vue from a config entry."""
-    global device_gids
-    global device_information
-    device_gids = []
-    device_information = {}
+    global DEVICE_GIDS
+    global DEVICE_INFORMATION
+    DEVICE_GIDS = []
+    DEVICE_INFORMATION = {}
 
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
@@ -93,21 +99,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
-        total_channels = 0
-        for d in devices:
-            total_channels += len(d.channels)
-        _LOGGER.info(
-            "Found {0} Emporia devices with {1} total channels".format(
-                len(devices), total_channels
-            )
-        )
         for device in devices:
-            if not device.device_gid in device_gids:
-                device_gids.append(device.device_gid)
+            if not device.device_gid in DEVICE_GIDS:
+                DEVICE_GIDS.append(device.device_gid)
                 # await loop.run_in_executor(None, vue.populate_device_properties, device)
-                device_information[device.device_gid] = device
+                DEVICE_INFORMATION[device.device_gid] = device
             else:
-                device_information[device.device_gid].channels += device.channels
+                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+
+        total_channels = 0
+        for _, device in DEVICE_INFORMATION.items():
+            total_channels += len(device.channels)
+        _LOGGER.info(
+            "Found %s Emporia devices with %s total channels",
+            len(DEVICE_INFORMATION.keys()),
+            total_channels,
+        )
 
         async def async_update_data_1min():
             """Fetch data from API endpoint at a 1 minute interval
@@ -115,12 +122,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            global last_minute_data
             data = await update_sensors(vue, [Scale.MINUTE.value])
             # store this, then have the daily sensors pull from it and integrate
             # then the daily can "true up" hourly (or more frequent) in case it's incorrect
             if data:
-                last_minute_data = data
+                global LAST_MINUTE_DATA
+                LAST_MINUTE_DATA = data
             return data
 
         async def async_update_data_1hr():
@@ -132,35 +139,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             return await update_sensors(vue, [Scale.MONTH.value])
 
         async def async_update_day_sensors():
-            global last_day_update
-            global last_day_data
+            global LAST_DAY_UPDATE
+            global LAST_DAY_DATA
             now = datetime.now(timezone.utc)
-            if not last_day_update or (now - last_day_update) > timedelta(minutes=15):
+            if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
-                last_day_update = now
-                last_day_data = await update_sensors(vue, [Scale.DAY.value])
+                LAST_DAY_UPDATE = now
+                LAST_DAY_DATA = await update_sensors(vue, [Scale.DAY.value])
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
-                if last_minute_data:
-                    for identifier, data in last_minute_data.items():
+                if LAST_MINUTE_DATA:
+                    for identifier, data in LAST_MINUTE_DATA.items():
                         device_gid, channel_gid, _ = identifier.split("-")
                         day_id = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
                         if (
                             data
-                            and last_day_data
-                            and day_id in last_day_data
-                            and last_day_data[day_id]
-                            and "usage" in last_day_data[day_id]
-                            and last_day_data[day_id]["usage"] is not None
+                            and LAST_DAY_DATA
+                            and day_id in LAST_DAY_DATA
+                            and LAST_DAY_DATA[day_id]
+                            and "usage" in LAST_DAY_DATA[day_id]
+                            and LAST_DAY_DATA[day_id]["usage"] is not None
                         ):
                             # if we just passed midnight, then reset back to zero
-                            handle_midnight(now, int(device_gid), day_id)
+                            timestamp: datetime = LAST_DAY_DATA[day_id]["timestamp"]
+                            check_for_midnight(timestamp, int(device_gid), day_id)
 
-                            last_day_data[day_id]["usage"] += data[
+                            LAST_DAY_DATA[day_id]["usage"] += data[
                                 "usage"
                             ]  # already in kwh
-            return last_day_data
+            return LAST_DAY_DATA
 
         coordinator_1min = None
         if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
@@ -240,14 +248,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
             charger_gid = int(gid_match.group(0))
             if (
-                charger_gid not in device_information
-                or not device_information[charger_gid].ev_charger
+                charger_gid not in DEVICE_INFORMATION
+                or not DEVICE_INFORMATION[charger_gid].ev_charger
             ):
                 raise HomeAssistantError(
                     f"Set Charging Current called on invalid device with entity id {charger_entity.entity_id} (unique id {unique_entity_id})"
                 )
 
-            charger_info = device_information[charger_gid]
+            charger_info = DEVICE_INFORMATION[charger_gid]
             # Scale the current to a minimum of 6 amps and max of the circuit max
             current = max(6, current)
             current = min(current, charger_info.ev_charger.max_charging_rate)
@@ -258,7 +266,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             updated_charger = await loop.run_in_executor(
                 None, vue.update_charger, charger_info.ev_charger, None, current
             )
-            device_information[charger_gid].ev_charger = updated_charger
+            DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
 
         hass.services.async_register(
             DOMAIN, "set_charger_current", handle_set_charger_current
@@ -305,7 +313,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     return unload_ok
 
 
-async def update_sensors(vue, scales):
+async def update_sensors(vue: PyEmVue, scales: list[str]):
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
@@ -314,17 +322,17 @@ async def update_sensors(vue, scales):
         for scale in scales:
             utcnow = datetime.now(timezone.utc)
             usage_dict = await loop.run_in_executor(
-                None, vue.get_device_list_usage, device_gids, utcnow, scale
+                None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
             )
             if not usage_dict:
                 _LOGGER.warning(
                     "No channels found during update for scale %s. Retrying", scale
                 )
                 usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, device_gids, utcnow, scale
+                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
                 )
             if usage_dict:
-                recurse_usage_data(usage_dict, scale, data)
+                recurse_usage_data(usage_dict, scale, data, utcnow)
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
 
@@ -334,8 +342,20 @@ async def update_sensors(vue, scales):
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
 
-def recurse_usage_data(usage_devices, scale, data):
+def recurse_usage_data(
+    usage_devices: dict[int, VueUsageDevice],
+    scale: str,
+    data: dict[str, Any],
+    requested_time: datetime,
+):
+    """Loop through the result from get_device_list_usage and pull out the data we want to use."""
     for gid, device in usage_devices.items():
+        if (device.timestamp - requested_time).total_seconds() > 30:
+            _LOGGER.warning(
+                "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
+                requested_time,
+                device.timestamp,
+            )
         for channel_num, channel in device.channels.items():
             if not channel:
                 continue
@@ -365,27 +385,50 @@ def recurse_usage_data(usage_devices, scale, data):
                         reset_datetime = reset_datetime.replace(
                             day=reset_day
                         ) - dateutil.relativedelta.relativedelta(months=1)
+            fixed_usage = channel.usage
+            if fixed_usage is None:
+                prev_value = 0
+                if (
+                    scale is Scale.MINUTE.value
+                    and identifier in LAST_MINUTE_DATA
+                    and "usage" in LAST_MINUTE_DATA[identifier]
+                ):
+                    prev_value = LAST_MINUTE_DATA[identifier]["usage"]
+                elif (
+                    scale is Scale.DAY.value
+                    and identifier in LAST_DAY_DATA
+                    and "usage" in LAST_DAY_DATA[identifier]
+                ):
+                    prev_value = LAST_DAY_DATA[identifier]["usage"]
+                _LOGGER.warning(
+                    "Got None usage for device %s channel %s scale %s and timestamp %s. Using previous known value of %s",
+                    gid,
+                    channel_num,
+                    scale,
+                    device.timestamp.isoformat(),
+                    prev_value,
+                )
+                fixed_usage = prev_value
 
-                # _LOGGER.info(
-                #     "Reset time for %s is %s", identifier, reset_datetime.isoformat()
-                # )
+            fixed_usage = fix_usage_sign(channel_num, fixed_usage)
 
             data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
-                "usage": fix_usage_sign(channel_num, channel.usage),
+                "usage": fixed_usage,
                 "scale": scale,
                 "info": info,
                 "reset": reset_datetime,
+                "timestamp": device.timestamp,
             }
             if channel.nested_devices:
-                recurse_usage_data(channel.nested_devices, scale, data)
+                recurse_usage_data(channel.nested_devices, scale, data, requested_time)
 
 
-def find_device_info_for_channel(channel):
+def find_device_info_for_channel(channel: VueDeviceChannelUsage):
     device_info = None
-    if channel.device_gid in device_information:
-        device_info = device_information[channel.device_gid]
+    if channel.device_gid in DEVICE_INFORMATION:
+        device_info = DEVICE_INFORMATION[channel.device_gid]
         if channel.channel_num in [
             "MainsFromGrid",
             "MainsToGrid",
@@ -406,29 +449,33 @@ def find_device_info_for_channel(channel):
                     channel.device_gid,
                     channel.channel_num,
                 )
+                multiplier = 1.0
+                type_gid = 1
+                if channel_123:
+                    multiplier = channel_123.channel_multiplier
+                    type_gid = channel_123.channel_type_gid
+
                 device_info.channels.append(
                     VueDeviceChannel(
                         gid=channel.device_gid,
                         name=channel.name,
                         channelNum=channel.channel_num,
-                        channelMultiplier=channel_123.channel_multiplier,
-                        channelTypeGid=channel_123.channel_type_gid,
+                        channelMultiplier=multiplier,
+                        channelTypeGid=type_gid,
                     )
                 )
     return device_info
 
 
-def make_channel_id(channel, scale):
+def make_channel_id(channel: VueDeviceChannelUsage, scale: str):
     """Format the channel id for a channel and scale"""
     return "{0}-{1}-{2}".format(channel.device_gid, channel.channel_num, scale)
 
 
-def fix_usage_sign(channel_num, usage):
+def fix_usage_sign(channel_num: str, usage: float):
     """If the channel is not '1,2,3' or 'Balance' we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
     if usage and channel_num not in ["1,2,3", "Balance"]:
         return abs(usage)
-    if not usage:
-        usage = 0
     return usage
 
 
@@ -441,21 +488,21 @@ def change_time_to_local(time: datetime, tz_string: str):
     return time.astimezone(tz_info)
 
 
-def handle_midnight(now: datetime, device_gid: int, day_id: str):
-    """If midnight has recently passed, reset the last_day_data for Day sensors to zero"""
-    global device_information
-    global last_day_data
-    if device_gid in device_information:
-        device_info = device_information[device_gid]
-        local_time = change_time_to_local(now, device_info.time_zone)
+def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
+    """If midnight has recently passed, reset the LAST_DAY_DATA for Day sensors to zero"""
+    if device_gid in DEVICE_INFORMATION:
+        device_info = DEVICE_INFORMATION[device_gid]
+        local_time = change_time_to_local(timestamp, device_info.time_zone)
         local_midnight = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        if (local_time - local_midnight) < timedelta(minutes=1, seconds=45):
-            # Midnight happened since the last update, reset to zero
+        last_reset = LAST_DAY_DATA[day_id]["reset"]
+        if local_midnight > last_reset:
+            # New reset time found
             _LOGGER.warning(
-                "Midnight happened recently for id %s! Current time is %s, midnight is %s",
+                "Midnight happened recently for id %s! Timestamp is %s, midnight is %s, previous reset was %s",
                 day_id,
                 local_time,
                 local_midnight,
+                last_reset,
             )
-            last_day_data[day_id]["usage"] = 0
-            last_day_data[day_id]["reset"] = local_midnight
+            LAST_DAY_DATA[day_id]["usage"] = 0
+            LAST_DAY_DATA[day_id]["reset"] = local_midnight
