@@ -2,7 +2,8 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-import dateutil
+import dateutil.tz
+import dateutil.relativedelta
 import logging
 
 from pyemvue import PyEmVue
@@ -162,7 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                             and LAST_DAY_DATA[day_id]["usage"] is not None
                         ):
                             # if we just passed midnight, then reset back to zero
-                            timestamp: datetime = LAST_DAY_DATA[day_id]["timestamp"]
+                            timestamp: datetime = data["timestamp"]
                             check_for_midnight(timestamp, int(device_gid), day_id)
 
                             LAST_DAY_DATA[day_id]["usage"] += data[
@@ -350,82 +351,65 @@ def recurse_usage_data(
 ):
     """Loop through the result from get_device_list_usage and pull out the data we want to use."""
     for gid, device in usage_devices.items():
-        if (device.timestamp - requested_time).total_seconds() > 30:
-            _LOGGER.warning(
-                "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
-                requested_time,
-                device.timestamp,
-            )
-        for channel_num, channel in device.channels.items():
-            if not channel:
-                continue
-            reset_datetime = None
-            identifier = make_channel_id(channel, scale)
-            info = find_device_info_for_channel(channel)
-            if scale in [Scale.DAY.value, Scale.MONTH.value]:
-                # We need to know when the value reset
-                # For day, that should be midnight local time, but we need to use the timestamp returned to us
-                # for month, that should be midnight of the reset day they specify in the app
-
-                # in either case, convert the given timestamp to local time first
-
-                local_time = change_time_to_local(device.timestamp, info.time_zone)
-                # take the timestamp, convert to midnight
-                reset_datetime = local_time.replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                if scale is Scale.MONTH.value:
-                    # Month should use the last billing_cycle_start_day of either this or last month
-                    reset_day = info.billing_cycle_start_day
-                    if reset_datetime.day >= reset_day:
-                        # we're past the reset day for this month, just set the day on the local time
-                        reset_datetime = reset_datetime.replace(day=reset_day)
-                    else:
-                        # we're in the start of a month, roll back to the reset_day of last month
-                        reset_datetime = reset_datetime.replace(
-                            day=reset_day
-                        ) - dateutil.relativedelta.relativedelta(months=1)
-            fixed_usage = channel.usage
-            if fixed_usage is None:
-                prev_value = 0
-                if (
-                    scale is Scale.MINUTE.value
-                    and identifier in LAST_MINUTE_DATA
-                    and "usage" in LAST_MINUTE_DATA[identifier]
-                ):
-                    prev_value = LAST_MINUTE_DATA[identifier]["usage"]
-                elif (
-                    scale is Scale.DAY.value
-                    and identifier in LAST_DAY_DATA
-                    and "usage" in LAST_DAY_DATA[identifier]
-                ):
-                    prev_value = LAST_DAY_DATA[identifier]["usage"]
+        if device.device_gid in DEVICE_INFORMATION:
+            info = DEVICE_INFORMATION[device.device_gid]
+            local_time = change_time_to_local(device.timestamp, info.time_zone)
+            requested_time_local = change_time_to_local(requested_time, info.time_zone)
+            if abs((local_time - requested_time_local).total_seconds()) > 30:
                 _LOGGER.warning(
-                    "Got None usage for device %s channel %s scale %s and timestamp %s. Using previous known value of %s",
-                    gid,
-                    channel_num,
-                    scale,
-                    device.timestamp.isoformat(),
-                    prev_value,
+                    "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
+                    requested_time,
+                    device.timestamp,
                 )
-                fixed_usage = prev_value
+            for channel_num, channel in device.channels.items():
+                if not channel:
+                    continue
+                reset_datetime = None
+                identifier = make_channel_id(channel, scale)
+                handle_special_channels_for_device(channel)
 
-            fixed_usage = fix_usage_sign(channel_num, fixed_usage)
+                if scale in [Scale.DAY.value, Scale.MONTH.value]:
+                    # We need to know when the value reset
+                    # For day, that should be midnight local time, but we need to use the timestamp returned to us
+                    # for month, that should be midnight of the reset day they specify in the app
+                    reset_datetime = determine_reset_datetime(
+                        local_time,
+                        info.billing_cycle_start_day,
+                        scale == Scale.MONTH.value,
+                    )
 
-            data[identifier] = {
-                "device_gid": gid,
-                "channel_num": channel_num,
-                "usage": fixed_usage,
-                "scale": scale,
-                "info": info,
-                "reset": reset_datetime,
-                "timestamp": device.timestamp,
-            }
-            if channel.nested_devices:
-                recurse_usage_data(channel.nested_devices, scale, data, requested_time)
+                # Fix the usage if we got None
+                # Use the last value if we have it, otherwise use zero
+                fixed_usage = channel.usage
+                if fixed_usage is None:
+                    fixed_usage = handle_none_usage(scale, identifier)
+                    _LOGGER.info(
+                        "Got None usage for device %s channel %s scale %s and timestamp %s. Instead using a value of %s",
+                        gid,
+                        channel_num,
+                        scale,
+                        local_time.isoformat(),
+                        fixed_usage,
+                    )
+
+                fixed_usage = fix_usage_sign(channel_num, fixed_usage)
+
+                data[identifier] = {
+                    "device_gid": gid,
+                    "channel_num": channel_num,
+                    "usage": fixed_usage,
+                    "scale": scale,
+                    "info": info,
+                    "reset": reset_datetime,
+                    "timestamp": local_time,
+                }
+                if channel.nested_devices:
+                    recurse_usage_data(
+                        channel.nested_devices, scale, data, requested_time
+                    )
 
 
-def find_device_info_for_channel(channel: VueDeviceChannelUsage):
+def handle_special_channels_for_device(channel: VueDeviceChannelUsage):
     device_info = None
     if channel.device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[channel.device_gid]
@@ -484,7 +468,7 @@ def change_time_to_local(time: datetime, tz_string: str):
     tz_info = dateutil.tz.gettz(tz_string)
     if not time.tzinfo or time.tzinfo.utcoffset(time) is None:
         # unaware, assume it's already utc
-        time = time.replace(tzinfo=datetime.timezone.utc)
+        time = time.replace(tzinfo=timezone.utc)
     return time.astimezone(tz_info)
 
 
@@ -506,3 +490,34 @@ def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
             )
             LAST_DAY_DATA[day_id]["usage"] = 0
             LAST_DAY_DATA[day_id]["reset"] = local_midnight
+
+
+def determine_reset_datetime(
+    local_time: datetime, monthly_cycle_start: int, is_month: bool
+):
+    """Determine the last reset datetime (aware) based on the passed time and cycle start date"""
+    reset_datetime = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    if is_month:
+        # Month should use the last billing_cycle_start_day of either this or last month
+        reset_datetime = reset_datetime.replace(day=monthly_cycle_start)
+        if reset_datetime.day < monthly_cycle_start:
+            # we're in the start of a month, use the reset_day for last month
+            reset_datetime -= dateutil.relativedelta.relativedelta(months=1)
+    return reset_datetime
+
+
+def handle_none_usage(scale: str, identifier: str):
+    """Handle the case of the usage being None by using the previous value or zero."""
+    if (
+        scale is Scale.MINUTE.value
+        and identifier in LAST_MINUTE_DATA
+        and "usage" in LAST_MINUTE_DATA[identifier]
+    ):
+        return LAST_MINUTE_DATA[identifier]["usage"]
+    if (
+        scale is Scale.DAY.value
+        and identifier in LAST_DAY_DATA
+        and "usage" in LAST_DAY_DATA[identifier]
+    ):
+        return LAST_DAY_DATA[identifier]["usage"]
+    return 0
