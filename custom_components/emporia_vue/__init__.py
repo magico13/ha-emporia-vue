@@ -322,6 +322,12 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
         loop = asyncio.get_event_loop()
         for scale in scales:
             utcnow = datetime.now(timezone.utc)
+            # If we are fetching minute data, there is a strong possibility that
+            # we will fetch an incomplete minute that is not cumulative. Therefore,
+            # always ensure that we're fetching the previous minute. Unlike DAY and
+            # MONTH values, we are not calculating a reset value.
+            if scale is Scale.MINUTE.value:
+                utcnow = utcnow+timedelta(seconds=-(utcnow.second+1))
             usage_dict = await loop.run_in_executor(
                 None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
             )
