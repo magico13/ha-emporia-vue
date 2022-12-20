@@ -1,6 +1,6 @@
 {
     "name": "Emporia Vue",
     "render_readme": true,
-    "homeassistant": "2021.9.0"
+    "homeassistant": "2021.9.0",
     "content_in_root": false
 }
