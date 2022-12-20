@@ -1,6 +1,6 @@
 {
     "name": "Emporia Vue",
-    "domains": ["sensor", "switch"],
-    "iot_class": "Cloud Polling",
+    "render_readme": true,
     "homeassistant": "2021.9.0"
+    "content_in_root": false
 }
