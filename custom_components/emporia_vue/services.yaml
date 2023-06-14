@@ -8,11 +8,9 @@ set_charger_current:
     entity:
       integration: emporia_vue
       device_class: outlet
-      multiple: false
     device:
       manufacturer: Emporia
       model: VVDN01
-      multiple: false
       entity:
         integration: emporia_vue
         device_class: outlet

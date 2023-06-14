@@ -481,7 +481,7 @@ def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
         last_reset = LAST_DAY_DATA[day_id]["reset"]
         if local_midnight > last_reset:
             # New reset time found
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Midnight happened recently for id %s! Timestamp is %s, midnight is %s, previous reset was %s",
                 day_id,
                 local_time,
