@@ -2,6 +2,7 @@
 import asyncio
 from datetime import timedelta
 import logging
+import requests
 
 from homeassistant.components.switch import (
     SwitchDeviceClass,
@@ -172,22 +173,24 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn the charger on."""
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            self._vue.update_charger,
-            self._coordinator.data[self._device.device_gid],
-            True,
-        )
-        await self._coordinator.async_request_refresh()
+        await self._update_switch(True)
 
     async def async_turn_off(self, **kwargs):
         """Turn the charger off."""
+        await self._update_switch(False)
+
+    async def _update_switch(self, on: bool):
+        """Update the switch"""
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            self._vue.update_charger,
-            self._coordinator.data[self._device.device_gid],
-            False,
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                self._vue.update_charger,
+                self._coordinator.data[self._device.device_gid],
+                on,
+            )
+        except requests.exceptions.HTTPError as err:
+            _LOGGER.error("Error updating charger status: %s \nResponse body: %s", err, err.response.text)
+            raise
         await self._coordinator.async_request_refresh()
+

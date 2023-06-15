@@ -15,6 +15,7 @@ from pyemvue.device import (
 )
 from pyemvue.enums import Scale
 import re
+import requests
 
 import voluptuous as vol
 
@@ -264,10 +265,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 "Setting charger %s to current of %d amps", charger_gid, current
             )
 
-            updated_charger = await loop.run_in_executor(
-                None, vue.update_charger, charger_info.ev_charger, None, current
-            )
-            DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
+            try:
+                updated_charger = await loop.run_in_executor(
+                    None, vue.update_charger, charger_info.ev_charger, None, current
+                )
+                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
+            except requests.exceptions.HTTPError as err:
+                _LOGGER.error("Error updating charger status: %s \nResponse body: %s", err, err.response.text)
+                raise
 
         hass.services.async_register(
             DOMAIN, "set_charger_current", handle_set_charger_current
