@@ -88,7 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
     password = entry_data[CONF_PASSWORD]
-    # _LOGGER.info(entry_data)
+   
     vue = PyEmVue()
     loop = asyncio.get_event_loop()
     try:
@@ -104,6 +104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         for device in devices:
             if not device.device_gid in DEVICE_GIDS:
                 DEVICE_GIDS.append(device.device_gid)
+                _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
                 # await loop.run_in_executor(None, vue.populate_device_properties, device)
                 DEVICE_INFORMATION[device.device_gid] = device
             else:
@@ -132,7 +133,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 LAST_MINUTE_DATA = data
             return data
 
-        async def async_update_data_1hr():
+        async def async_update_data_1mon():
             """Fetch data from API endpoint at a 1 hour interval
 
             This is the place to pre-process the data to lookup tables
@@ -185,19 +186,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
             await coordinator_1min.async_config_entry_first_refresh()
             _LOGGER.info("1min Update data: %s", coordinator_1min.data)
-        coordinator_1hr = None
+        coordinator_1mon = None
         if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
-            coordinator_1hr = DataUpdateCoordinator(
+            coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
                 # Name of the data. For logging purposes.
                 name="sensor",
-                update_method=async_update_data_1hr,
+                update_method=async_update_data_1mon,
                 # Polling interval. Will only be polled if there are subscribers.
                 update_interval=timedelta(hours=1),
             )
-            await coordinator_1hr.async_config_entry_first_refresh()
-            _LOGGER.info("1hr Update data: %s", coordinator_1hr.data)
+            await coordinator_1mon.async_config_entry_first_refresh()
+            _LOGGER.info("1mon Update data: %s", coordinator_1mon.data)
 
         coordinator_day_sensor = None
         if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
@@ -271,7 +272,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 )
                 DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
             except requests.exceptions.HTTPError as err:
-                _LOGGER.error("Error updating charger status: %s \nResponse body: %s", err, err.response.text)
+                _LOGGER.error(
+                    "Error updating charger status: %s \nResponse body: %s",
+                    err,
+                    err.response.text,
+                )
                 raise
 
         hass.services.async_register(
@@ -287,7 +292,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
         "coordinator_1min": coordinator_1min,
-        "coordinator_1hr": coordinator_1hr,
+        "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
     }
 
@@ -338,7 +343,14 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
                     None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
                 )
             if usage_dict:
-                recurse_usage_data(usage_dict, scale, data, utcnow)
+                flattened, data_time = flatten_usage_data(usage_dict, scale)
+                parse_flattened_usage_data(
+                    flattened,
+                    scale,
+                    data,
+                    utcnow,
+                    data_time,
+                )
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
 
@@ -348,73 +360,97 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
         raise UpdateFailed(f"Error communicating with Emporia API: {err}")
 
 
-def recurse_usage_data(
+def flatten_usage_data(
     usage_devices: dict[int, VueUsageDevice],
+    scale: str,
+) -> tuple[dict[str, VueDeviceChannelUsage], datetime]:
+    """Flattens the raw usage data into a dictionary of channel ids and usage info."""
+    flattened: dict[str, VueDeviceChannelUsage] = {}
+    data_time = None
+    for _, usage in usage_devices.items():
+        data_time = usage.timestamp
+        if usage.channels:
+            for _, channel in usage.channels.items():
+                identifier = make_channel_id(channel, scale)
+                flattened[identifier] = channel
+                if channel.nested_devices:
+                    nested_flattened, _ = flatten_usage_data(
+                        channel.nested_devices, scale
+                    )
+                    flattened.update(nested_flattened)
+    return (flattened, data_time)
+
+
+def parse_flattened_usage_data(
+    flattened_data: dict[str, VueDeviceChannelUsage],
     scale: str,
     data: dict[str, Any],
     requested_time: datetime,
+    data_time: datetime = None,
 ):
-    """Loop through the result from get_device_list_usage and pull out the data we want to use."""
-    for gid, device in usage_devices.items():
-        if device.device_gid in DEVICE_INFORMATION:
-            info = DEVICE_INFORMATION[device.device_gid]
-            local_time = change_time_to_local(device.timestamp, info.time_zone)
-            requested_time_local = change_time_to_local(requested_time, info.time_zone)
-            if abs((local_time - requested_time_local).total_seconds()) > 30:
-                _LOGGER.warning(
-                    "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
-                    requested_time,
-                    device.timestamp,
+    """Loop through the device list and find the corresponding update data."""
+    for gid, info in DEVICE_INFORMATION.items():
+        local_time = change_time_to_local(data_time, info.time_zone)
+        requested_time_local = change_time_to_local(requested_time, info.time_zone)
+        if abs((local_time - requested_time_local).total_seconds()) > 30:
+            _LOGGER.warning(
+                "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
+                requested_time,
+                data_time,
+            )
+        for info_channel in info.channels:
+            identifier = make_channel_id(info_channel, scale)
+            channel_num = info_channel.channel_num
+            channel = (
+                flattened_data[identifier] if identifier in flattened_data else None
+            )
+            if not channel:
+                _LOGGER.info(
+                    "Could not find usage info for device %s channel %s",
+                    gid,
+                    channel_num,
                 )
-            for channel_num, channel in device.channels.items():
-                if not channel:
-                    continue
-                reset_datetime = None
-                identifier = make_channel_id(channel, scale)
-                handle_special_channels_for_device(channel)
+            reset_datetime = None
+            handle_special_channels_for_device(info_channel)
 
-                if scale in [Scale.DAY.value, Scale.MONTH.value]:
-                    # We need to know when the value reset
-                    # For day, that should be midnight local time, but we need to use the timestamp returned to us
-                    # for month, that should be midnight of the reset day they specify in the app
-                    reset_datetime = determine_reset_datetime(
-                        local_time,
-                        info.billing_cycle_start_day,
-                        scale == Scale.MONTH.value,
-                    )
+            if scale in [Scale.DAY.value, Scale.MONTH.value]:
+                # We need to know when the value reset
+                # For day, that should be midnight local time, but we need to use the timestamp returned to us
+                # for month, that should be midnight of the reset day they specify in the app
+                reset_datetime = determine_reset_datetime(
+                    local_time,
+                    info.billing_cycle_start_day,
+                    scale == Scale.MONTH.value,
+                )
 
-                # Fix the usage if we got None
-                # Use the last value if we have it, otherwise use zero
-                fixed_usage = channel.usage
-                if fixed_usage is None:
-                    fixed_usage = handle_none_usage(scale, identifier)
-                    _LOGGER.info(
-                        "Got None usage for device %s channel %s scale %s and timestamp %s. Instead using a value of %s",
-                        gid,
-                        channel_num,
-                        scale,
-                        local_time.isoformat(),
-                        fixed_usage,
-                    )
+            # Fix the usage if we got None
+            # Use the last value if we have it, otherwise use zero
+            fixed_usage = channel.usage if channel else 0
+            if fixed_usage is None:
+                fixed_usage = handle_none_usage(scale, identifier)
+                _LOGGER.info(
+                    "Got None usage for device %s channel %s scale %s and timestamp %s. Instead using a value of %s",
+                    gid,
+                    channel_num,
+                    scale,
+                    local_time.isoformat(),
+                    fixed_usage,
+                )
 
-                fixed_usage = fix_usage_sign(channel_num, fixed_usage)
+            fixed_usage = fix_usage_sign(channel_num, fixed_usage)
 
-                data[identifier] = {
-                    "device_gid": gid,
-                    "channel_num": channel_num,
-                    "usage": fixed_usage,
-                    "scale": scale,
-                    "info": info,
-                    "reset": reset_datetime,
-                    "timestamp": local_time,
-                }
-                if channel.nested_devices:
-                    recurse_usage_data(
-                        channel.nested_devices, scale, data, requested_time
-                    )
+            data[identifier] = {
+                "device_gid": gid,
+                "channel_num": channel_num,
+                "usage": fixed_usage,
+                "scale": scale,
+                "info": info,
+                "reset": reset_datetime,
+                "timestamp": local_time,
+            }
 
 
-def handle_special_channels_for_device(channel: VueDeviceChannelUsage):
+def handle_special_channels_for_device(channel: VueDeviceChannel):
     device_info = None
     if channel.device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[channel.device_gid]
@@ -456,7 +492,7 @@ def handle_special_channels_for_device(channel: VueDeviceChannelUsage):
     return device_info
 
 
-def make_channel_id(channel: VueDeviceChannelUsage, scale: str):
+def make_channel_id(channel: VueDeviceChannel, scale: str):
     """Format the channel id for a channel and scale"""
     return "{0}-{1}-{2}".format(channel.device_gid, channel.channel_num, scale)
 

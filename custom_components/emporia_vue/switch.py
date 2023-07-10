@@ -104,7 +104,7 @@ async def async_setup_entry(
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of an Emporia Smart Outlet state"""
 
-    def __init__(self, coordinator, vue, gid):
+    def __init__(self, coordinator, vue, gid) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         # self._state = coordinator.data[index]['usage']
@@ -190,7 +190,10 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):
                 on,
             )
         except requests.exceptions.HTTPError as err:
-            _LOGGER.error("Error updating charger status: %s \nResponse body: %s", err, err.response.text)
+            _LOGGER.error(
+                "Error updating charger status: %s \nResponse body: %s",
+                err,
+                err.response.text,
+            )
             raise
         await self._coordinator.async_request_refresh()
-

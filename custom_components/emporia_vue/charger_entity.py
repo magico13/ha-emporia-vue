@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Mapping
+from typing import Any
 
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -24,7 +24,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
         units: str,
         device_class: str,
         enabled_default=True,
-    ):
+    ) -> None:
         super().__init__(coordinator)
         self._coordinator = coordinator
         self._device = device
@@ -40,7 +40,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
         return self._enabled_default
 
     @property
-    def extra_state_attributes(self) -> Mapping[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         data = self._coordinator.data[self._device.device_gid]
         if data:
             return {
