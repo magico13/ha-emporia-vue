@@ -1,4 +1,5 @@
 """Platform for sensor integration."""
+from typing import Optional
 from homeassistant.components.sensor import (
     SensorStateClass,
     SensorDeviceClass,
@@ -19,6 +20,7 @@ from homeassistant.helpers.update_coordinator import (
 from .const import DOMAIN
 
 from pyemvue.enums import Scale
+from pyemvue.device import VueDevice, VueDeviceChannel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +62,11 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._id = identifier
-        self._scale = coordinator.data[identifier]["scale"]
-        device_gid = coordinator.data[identifier]["device_gid"]
-        channel_num = coordinator.data[identifier]["channel_num"]
-        self._device = coordinator.data[identifier]["info"]
-        self._channel = None
+        self._scale: str = coordinator.data[identifier]["scale"]
+        device_gid: int = coordinator.data[identifier]["device_gid"]
+        channel_num: str = coordinator.data[identifier]["channel_num"]
+        self._device: VueDevice = coordinator.data[identifier]["info"]
+        self._channel: Optional[VueDeviceChannel] = None
         if self._device is not None:
             for channel in self._device.channels:
                 if channel.channel_num == channel_num:

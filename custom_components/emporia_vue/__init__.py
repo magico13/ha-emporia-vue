@@ -1,7 +1,7 @@
 """The Emporia Vue integration."""
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 import dateutil.tz
 import dateutil.relativedelta
 import logging
@@ -52,8 +52,7 @@ DEVICE_GIDS: list[int] = []
 DEVICE_INFORMATION: dict[int, VueDevice] = {}
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
-LAST_DAY_UPDATE: datetime = None
-
+LAST_DAY_UPDATE: Optional[datetime] = None
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Emporia Vue component."""
@@ -88,7 +87,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     entry_data = entry.data
     email = entry_data[CONF_EMAIL]
     password = entry_data[CONF_PASSWORD]
-   
     vue = PyEmVue()
     loop = asyncio.get_event_loop()
     try:
@@ -366,9 +364,9 @@ def flatten_usage_data(
 ) -> tuple[dict[str, VueDeviceChannelUsage], datetime]:
     """Flattens the raw usage data into a dictionary of channel ids and usage info."""
     flattened: dict[str, VueDeviceChannelUsage] = {}
-    data_time = None
+    data_time: datetime = datetime.now(timezone.utc)
     for _, usage in usage_devices.items():
-        data_time = usage.timestamp
+        data_time = usage.timestamp or data_time
         if usage.channels:
             for _, channel in usage.channels.items():
                 identifier = make_channel_id(channel, scale)
@@ -386,9 +384,10 @@ def parse_flattened_usage_data(
     scale: str,
     data: dict[str, Any],
     requested_time: datetime,
-    data_time: datetime = None,
+    data_time: datetime,
 ):
     """Loop through the device list and find the corresponding update data."""
+    unused_data = flattened_data.copy()
     for gid, info in DEVICE_INFORMATION.items():
         local_time = change_time_to_local(data_time, info.time_zone)
         requested_time_local = change_time_to_local(requested_time, info.time_zone)
@@ -410,8 +409,8 @@ def parse_flattened_usage_data(
                     gid,
                     channel_num,
                 )
+            unused_data.pop(identifier, None)
             reset_datetime = None
-            handle_special_channels_for_device(info_channel)
 
             if scale in [Scale.DAY.value, Scale.MONTH.value]:
                 # We need to know when the value reset
@@ -448,9 +447,24 @@ def parse_flattened_usage_data(
                 "reset": reset_datetime,
                 "timestamp": local_time,
             }
+    if unused_data:
+        # unused_data is not json serializable because VueDeviceChannelUsage is not JSON serializable
+        # instead print out dictionary as a string
+        _LOGGER.warning(
+            "Unused data found during update. Unused data: %s",
+            str(unused_data),
+        )
+        channels_were_added = False
+        for identifier, channel in unused_data.items():
+            channels_were_added |= handle_special_channels_for_device(channel)
+            # we'll also need to register these entities I think. They might show up automatically on the first run
+        # When we're done handling the unused data we need to rerun the update
+        if channels_were_added:
+            _LOGGER.info("Rerunning update due to added channels")
+            parse_flattened_usage_data(flattened_data, scale, data, requested_time, data_time)
 
 
-def handle_special_channels_for_device(channel: VueDeviceChannel):
+def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
     device_info = None
     if channel.device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[channel.device_gid]
@@ -489,7 +503,8 @@ def handle_special_channels_for_device(channel: VueDeviceChannel):
                         channelTypeGid=type_gid,
                     )
                 )
-    return device_info
+                return True
+    return False
 
 
 def make_channel_id(channel: VueDeviceChannel, scale: str):

@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -21,7 +21,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
         coordinator,
         vue: pyemvue.PyEmVue,
         device: VueDevice,
-        units: str,
+        units: Optional[str],
         device_class: str,
         enabled_default=True,
     ) -> None:
@@ -50,7 +50,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
                 "message": data.message,
                 "fault_text": data.fault_text,
             }
-        return None
+        return {}
 
     @property
     def unique_id(self) -> str:
