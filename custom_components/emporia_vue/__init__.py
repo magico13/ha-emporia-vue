@@ -237,7 +237,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             elif entity_id:
                 entity_registry = er.async_get(hass)
                 charger_entity = entity_registry.async_get(entity_id[0])
-            else:
+            if not charger_entity:
                 raise HomeAssistantError("Target device or Entity required.")
 
             unique_entity_id = charger_entity.unique_id
@@ -255,8 +255,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 raise HomeAssistantError(
                     f"Set Charging Current called on invalid device with entity id {charger_entity.entity_id} (unique id {unique_entity_id})"
                 )
-
+            
+            state = hass.states.get(charger_entity.entity_id)
+            _LOGGER.info("State is %s", str(state))
+            if not state:
+                raise HomeAssistantError(
+                    f"Could not find state for entity {charger_entity.entity_id}"
+                )
             charger_info = DEVICE_INFORMATION[charger_gid]
+            if charger_info.ev_charger is None:
+                raise HomeAssistantError(
+                    f"Could not find charger info for device {charger_gid}"
+                )
             # Scale the current to a minimum of 6 amps and max of the circuit max
             current = max(6, current)
             current = min(current, charger_info.ev_charger.max_charging_rate)
@@ -266,7 +276,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
             try:
                 updated_charger = await loop.run_in_executor(
-                    None, vue.update_charger, charger_info.ev_charger, None, current
+                    None, vue.update_charger, charger_info.ev_charger, state.state == "on", current
                 )
                 DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
             except requests.exceptions.HTTPError as err:
@@ -342,7 +352,7 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
                 )
             if usage_dict:
                 flattened, data_time = flatten_usage_data(usage_dict, scale)
-                parse_flattened_usage_data(
+                await parse_flattened_usage_data(
                     flattened,
                     scale,
                     data,
@@ -379,7 +389,7 @@ def flatten_usage_data(
     return (flattened, data_time)
 
 
-def parse_flattened_usage_data(
+async def parse_flattened_usage_data(
     flattened_data: dict[str, VueDeviceChannelUsage],
     scale: str,
     data: dict[str, Any],
@@ -456,54 +466,65 @@ def parse_flattened_usage_data(
         )
         channels_were_added = False
         for identifier, channel in unused_data.items():
-            channels_were_added |= handle_special_channels_for_device(channel)
+            channels_were_added |= await handle_special_channels_for_device(channel)
             # we'll also need to register these entities I think. They might show up automatically on the first run
         # When we're done handling the unused data we need to rerun the update
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
-            parse_flattened_usage_data(flattened_data, scale, data, requested_time, data_time)
+            await parse_flattened_usage_data(flattened_data, scale, data, requested_time, data_time)
 
 
-def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
+async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
     device_info = None
     if channel.device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[channel.device_gid]
-        if channel.channel_num in [
-            "MainsFromGrid",
-            "MainsToGrid",
-            "Balance",
-            "TotalUsage",
-        ]:
-            found = False
-            channel_123 = None
-            for device_channel in device_info.channels:
-                if device_channel.channel_num == channel.channel_num:
-                    found = True
-                    break
-                if device_channel.channel_num == "1,2,3":
-                    channel_123 = device_channel
-            if not found:
-                _LOGGER.info(
-                    "Adding channel for channel %s-%s",
-                    channel.device_gid,
-                    channel.channel_num,
-                )
-                multiplier = 1.0
-                type_gid = 1
-                if channel_123:
-                    multiplier = channel_123.channel_multiplier
-                    type_gid = channel_123.channel_type_gid
+        # if channel.channel_num in [
+        #     "MainsFromGrid",
+        #     "MainsToGrid",
+        #     "Balance",
+        #     "TotalUsage",
+        # ]:
+        found = False
+        channel_123 = None
+        for device_channel in device_info.channels:
+            if device_channel.channel_num == channel.channel_num:
+                found = True
+                break
+            if device_channel.channel_num == "1,2,3":
+                channel_123 = device_channel
+        if not found:
+            _LOGGER.info(
+                "Adding channel for channel %s-%s",
+                channel.device_gid,
+                channel.channel_num,
+            )
+            multiplier = 1.0
+            type_gid = 1
+            if channel_123:
+                multiplier = channel_123.channel_multiplier
+                type_gid = channel_123.channel_type_gid
 
-                device_info.channels.append(
-                    VueDeviceChannel(
-                        gid=channel.device_gid,
-                        name=channel.name,
-                        channelNum=channel.channel_num,
-                        channelMultiplier=multiplier,
-                        channelTypeGid=type_gid,
-                    )
+            device_info.channels.append(
+                VueDeviceChannel(
+                    gid=channel.device_gid,
+                    name=channel.name,
+                    channelNum=channel.channel_num,
+                    channelMultiplier=multiplier,
+                    channelTypeGid=type_gid,
                 )
-                return True
+            )
+
+                # register the entity
+                # registry = await async_get_registry(hass)
+                # registry.async_get_or_create(
+                #     domain='your_domain',
+                #     platform='your_platform',
+                #     unique_id=entity_id,
+                #     name=entity_name,
+                #     config_entry=config_entry,
+                #     device_id=device_id,
+                # )
+            return True
     return False
 
 

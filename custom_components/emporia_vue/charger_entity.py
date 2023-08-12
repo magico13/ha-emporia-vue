@@ -8,7 +8,7 @@ from homeassistant.helpers.update_coordinator import (
 from .const import DOMAIN
 
 from pyemvue import pyemvue
-from pyemvue.device import VueDevice
+from pyemvue.device import VueDevice, ChargerDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        data = self._coordinator.data[self._device.device_gid]
+        data: ChargerDevice = self._coordinator.data[self._device.device_gid]
         if data:
             return {
                 "charging_rate": data.charging_rate,
@@ -49,6 +49,9 @@ class EmporiaChargerEntity(CoordinatorEntity):
                 "status": data.status,
                 "message": data.message,
                 "fault_text": data.fault_text,
+                "icon_name": data.icon,
+                "icon_label": data.icon_label,
+                "icon_detail_text": data.icon_detail_text,
             }
         return {}
 
