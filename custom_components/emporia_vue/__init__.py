@@ -225,8 +225,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
             charger_entity = None
             if device_id:
-                entity_registry = er.async_get(hass)
-                entities = er.async_entries_for_device(entity_registry, device_id[0])
+                entity_registry = await er.async_get(hass)
+                entities = await er.async_entries_for_device(entity_registry, device_id[0])
                 for entity in entities:
                     _LOGGER.info("Entity is %s", str(entity))
                     if entity.entity_id.startswith("switch"):
@@ -235,8 +235,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 if not charger_entity:
                     charger_entity = entities[0]
             elif entity_id:
-                entity_registry = er.async_get(hass)
-                charger_entity = entity_registry.async_get(entity_id[0])
+                entity_registry = await er.async_get(hass)
+                charger_entity = await entity_registry.async_get(entity_id[0])
             if not charger_entity:
                 raise HomeAssistantError("Target device or Entity required.")
 
