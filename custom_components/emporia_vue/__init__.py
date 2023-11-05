@@ -220,6 +220,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 str(call.data),
             )
             current = call.data.get("current")
+            current = int(current)
             device_id = call.data.get("device_id", None)
             entity_id = call.data.get("entity_id", None)
 
