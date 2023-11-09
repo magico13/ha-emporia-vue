@@ -25,7 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, VUE_DATA, ENABLE_1M, ENABLE_1D, ENABLE_1MON
 
@@ -224,19 +224,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             device_id = call.data.get("device_id", None)
             entity_id = call.data.get("entity_id", None)
 
+            # if device or entity ids are strings, convert to list
+            if isinstance(device_id, str):
+                device_id = [device_id]
+            if isinstance(entity_id, str):
+                entity_id = [entity_id]
+
+            # technically we should loop through all the passed device and entities and update all
+            # but for now we'll just use the first one
             charger_entity = None
+            entity_registry = er.async_get(hass)
             if device_id:
-                entity_registry = er.async_get(hass)
                 entities = er.async_entries_for_device(entity_registry, device_id[0])
                 for entity in entities:
                     _LOGGER.info("Entity is %s", str(entity))
                     if entity.entity_id.startswith("switch"):
                         charger_entity = entity
                         break
-                if not charger_entity:
+                if not charger_entity and entities:
                     charger_entity = entities[0]
             elif entity_id:
-                entity_registry = er.async_get(hass)
                 charger_entity = entity_registry.async_get(entity_id[0])
             if not charger_entity:
                 raise HomeAssistantError("Target device or Entity required.")
@@ -256,7 +263,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 raise HomeAssistantError(
                     f"Set Charging Current called on invalid device with entity id {charger_entity.entity_id} (unique id {unique_entity_id})"
                 )
-            
+
             state = hass.states.get(charger_entity.entity_id)
             _LOGGER.info("State is %s", str(state))
             if not state:
@@ -280,6 +287,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     None, vue.update_charger, charger_info.ev_charger, state.state == "on", current
                 )
                 DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
+                # update the state of the charger entity using the updated data
+                state = hass.states.get(charger_entity.entity_id)
+                if state:
+                    newState = "on" if updated_charger.charger_on else "off"
+                    newAttributes = state.attributes.copy()
+                    newAttributes["charging_rate"] = updated_charger.charging_rate
+                    # good enough for now, update the state in the registry
+                    hass.states.async_set(charger_entity.entity_id, newState, newAttributes)
+
             except requests.exceptions.HTTPError as err:
                 _LOGGER.error(
                     "Error updating charger status: %s \nResponse body: %s",
