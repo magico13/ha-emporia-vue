@@ -1,33 +1,32 @@
 """The Emporia Vue integration."""
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
-import dateutil.tz
-import dateutil.relativedelta
 import logging
+import re
+from typing import Any, Optional
 
+import dateutil.relativedelta
+import dateutil.tz
 from pyemvue import PyEmVue
 from pyemvue.device import (
     VueDevice,
     VueDeviceChannel,
-    VueUsageDevice,
     VueDeviceChannelUsage,
+    VueUsageDevice,
 )
 from pyemvue.enums import Scale
-import re
 import requests
-
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator, UpdateFailed
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, VUE_DATA, ENABLE_1M, ENABLE_1D, ENABLE_1MON
+from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -91,6 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(None, vue.login, email, password)
+        #result = await loop.run_in_executor(None, vue.login_simulator, "http://localhost:8000", email, password)
         if not result:
             raise Exception("Could not authenticate with Emporia API")
     except Exception:
@@ -100,7 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
         for device in devices:
-            if not device.device_gid in DEVICE_GIDS:
+            if device.device_gid not in DEVICE_GIDS:
                 DEVICE_GIDS.append(device.device_gid)
                 _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
                 # await loop.run_in_executor(None, vue.populate_device_properties, device)
@@ -118,7 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         )
 
         async def async_update_data_1min():
-            """Fetch data from API endpoint at a 1 minute interval
+            """Fetch data from API endpoint at a 1 minute interval.
 
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
@@ -132,7 +132,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             return data
 
         async def async_update_data_1mon():
-            """Fetch data from API endpoint at a 1 hour interval
+            """Fetch data from API endpoint at a 1 hour interval.
 
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
@@ -213,7 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         # Setup custom services
         async def handle_set_charger_current(call):
-            """Handle setting the EV Charger current"""
+            """Handle setting the EV Charger current."""
             _LOGGER.debug(
                 "executing set_charger_current: %s %s",
                 str(call.service),
@@ -350,6 +350,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 
 async def update_sensors(vue: PyEmVue, scales: list[str]):
+    """Fetch data from API endpoint."""
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
@@ -482,7 +483,7 @@ async def parse_flattened_usage_data(
             str(unused_data),
         )
         channels_were_added = False
-        for identifier, channel in unused_data.items():
+        for _, channel in unused_data.items():
             channels_were_added |= await handle_special_channels_for_device(channel)
             # we'll also need to register these entities I think. They might show up automatically on the first run
         # When we're done handling the unused data we need to rerun the update
@@ -492,6 +493,7 @@ async def parse_flattened_usage_data(
 
 
 async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
+    """Handle the special channels for a device, if they exist."""
     device_info = None
     if channel.device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[channel.device_gid]
@@ -546,12 +548,12 @@ async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
 
 
 def make_channel_id(channel: VueDeviceChannel, scale: str):
-    """Format the channel id for a channel and scale"""
-    return "{0}-{1}-{2}".format(channel.device_gid, channel.channel_num, scale)
+    """Format the channel id for a channel and scale."""
+    return f"{channel.device_gid}-{channel.channel_num}-{scale}"
 
 
 def fix_usage_sign(channel_num: str, usage: float):
-    """If the channel is not '1,2,3' or 'Balance' we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)"""
+    """If the channel is not '1,2,3' or 'Balance' we need it to be positive (see https://github.com/magico13/ha-emporia-vue/issues/57)."""
     if usage and channel_num not in ["1,2,3", "Balance"]:
         return abs(usage)
     return usage
@@ -567,7 +569,7 @@ def change_time_to_local(time: datetime, tz_string: str):
 
 
 def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
-    """If midnight has recently passed, reset the LAST_DAY_DATA for Day sensors to zero"""
+    """If midnight has recently passed, reset the LAST_DAY_DATA for Day sensors to zero."""
     if device_gid in DEVICE_INFORMATION:
         device_info = DEVICE_INFORMATION[device_gid]
         local_time = change_time_to_local(timestamp, device_info.time_zone)
@@ -589,7 +591,7 @@ def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
 def determine_reset_datetime(
     local_time: datetime, monthly_cycle_start: int, is_month: bool
 ):
-    """Determine the last reset datetime (aware) based on the passed time and cycle start date"""
+    """Determine the last reset datetime (aware) based on the passed time and cycle start date."""
     reset_datetime = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
     if is_month:
         # Month should use the last billing_cycle_start_day of either this or last month

@@ -1,26 +1,20 @@
 """Platform for sensor integration."""
+import logging
 from typing import Optional
+
+from pyemvue.device import VueDevice, VueDeviceChannel
+from pyemvue.enums import Scale
+
 from homeassistant.components.sensor import (
-    SensorStateClass,
     SensorDeviceClass,
     SensorEntity,
+    SensorStateClass,
 )
-import logging
-
-from homeassistant.const import (
-    UnitOfEnergy,
-    UnitOfPower,
-)
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
-
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-
-from pyemvue.enums import Scale
-from pyemvue.device import VueDevice, VueDeviceChannel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,22 +114,21 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def unique_id(self):
-        """Unique ID for the sensor"""
+        """Unique ID for the sensor."""
         if self._scale == Scale.MINUTE.value:
             return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
         return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
 
     @property
     def device_info(self):
+        """Return the device info."""
         device_name = self._channel.name or self._device.device_name
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
                 (
                     DOMAIN,
-                    "{0}-{1}".format(
-                        self._device.device_gid, self._channel.channel_num
-                    ),
+                    f"{self._device.device_gid}-{self._channel.channel_num}",
                 )
             },
             "name": device_name,
@@ -160,7 +153,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         return usage
 
     def scale_is_energy(self):
-        """Returns True if the scale is an energy unit instead of power (hour and bigger)"""
+        """Return True if the scale is an energy unit instead of power."""
         return self._scale not in (
             Scale.MINUTE.value,
             Scale.SECOND.value,

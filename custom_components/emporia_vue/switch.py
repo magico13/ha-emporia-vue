@@ -2,12 +2,11 @@
 import asyncio
 from datetime import timedelta
 import logging
+
+from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
 import requests
 
-from homeassistant.components.switch import (
-    SwitchDeviceClass,
-    SwitchEntity,
-)
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -16,8 +15,6 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-
-from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
 
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
@@ -82,9 +79,11 @@ async def async_setup_entry(
 
     switches = []
     for _, gid in enumerate(coordinator.data):
+        if gid not in device_information:
+            continue
         if device_information[gid].outlet:
             switches.append(EmporiaOutletSwitch(coordinator, vue, gid))
-        elif device_information[gid].ev_charger:
+        elif  device_information[gid].ev_charger:
             switches.append(
                 EmporiaChargerSwitch(
                     coordinator,
@@ -99,7 +98,7 @@ async def async_setup_entry(
 
 
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
-    """Representation of an Emporia Smart Outlet state"""
+    """Representation of an Emporia Smart Outlet state."""
 
     def __init__(self, coordinator, vue, gid) -> None:
         """Pass coordinator to CoordinatorEntity."""
@@ -142,15 +141,16 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def unique_id(self):
-        """Unique ID for the switch"""
+        """Unique ID for the switch."""
         return f"switch.emporia_vue.{self._device_gid}"
 
     @property
     def device_info(self):
+        """Return the device information."""
         return {
             "identifiers": {
                 # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, "{0}-1,2,3".format(self._device_gid))
+                (DOMAIN, f"{self._device_gid}-1,2,3")
             },
             "name": self._device.device_name + "-1,2,3",
             "model": self._device.model,
@@ -161,7 +161,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
 
 
 class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):
-    """Representation of an Emporia Charger switch state"""
+    """Representation of an Emporia Charger switch state."""
 
     @property
     def is_on(self):
@@ -177,7 +177,7 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):
         await self._update_switch(False)
 
     async def _update_switch(self, on: bool):
-        """Update the switch"""
+        """Update the switch."""
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(

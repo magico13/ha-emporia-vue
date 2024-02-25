@@ -1,20 +1,16 @@
-import logging
+"""Emporia Charger Entity."""
 from typing import Any, Optional
 
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-)
+from pyemvue import pyemvue
+from pyemvue.device import ChargerDevice, VueDevice
+
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
-from pyemvue import pyemvue
-from pyemvue.device import VueDevice, ChargerDevice
-
-_LOGGER = logging.getLogger(__name__)
-
 
 class EmporiaChargerEntity(CoordinatorEntity):
-    """Emporia Charger Entity"""
+    """Emporia Charger Entity."""
 
     def __init__(
         self,
@@ -25,6 +21,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
         device_class: str,
         enabled_default=True,
     ) -> None:
+        """Initialize the sensor."""
         super().__init__(coordinator)
         self._coordinator = coordinator
         self._device = device
@@ -37,10 +34,12 @@ class EmporiaChargerEntity(CoordinatorEntity):
 
     @property
     def entity_registry_enabled_default(self):
+        """Return whether the entity should be enabled when first added to the entity registry."""
         return self._enabled_default
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the state attributes of the device."""
         data: ChargerDevice = self._coordinator.data[self._device.device_gid]
         if data:
             return {
@@ -57,14 +56,14 @@ class EmporiaChargerEntity(CoordinatorEntity):
 
     @property
     def unique_id(self) -> str:
-        """Unique ID for the charger"""
+        """Unique ID for the charger."""
         return f"charger.emporia_vue.{self._device.device_gid}"
 
     @property
     def device_info(self):
         """Return the device information."""
         return {
-            "identifiers": {(DOMAIN, "{0}-1,2,3".format(self._device.device_gid))},
+            "identifiers": {(DOMAIN, f"{self._device.device_gid}-1,2,3")},
             "name": self._device.device_name + "-1,2,3",
             "model": self._device.model,
             "sw_version": self._device.firmware,

@@ -1,15 +1,14 @@
 """Config flow for Emporia Vue integration."""
-import logging
 import asyncio
+import logging
+
+from pyemvue import PyEmVue
 import voluptuous as vol
 
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
-from .const import DOMAIN  # pylint:disable=unused-import
-from .const import ENABLE_1M, ENABLE_1D, ENABLE_1MON
-
-from pyemvue import PyEmVue
+from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON
 
 _LOGGER = logging.getLogger(__name__)
 
