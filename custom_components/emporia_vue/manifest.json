@@ -9,8 +9,8 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/magico13/ha-emporia-vue/issues",
-  "requirements": ["pyemvue==0.18.2"],
+  "requirements": ["pyemvue==0.18.3"],
   "ssdp": [],
-  "version": "0.9.1",
+  "version": "0.9.2",
   "zeroconf": []
 }
