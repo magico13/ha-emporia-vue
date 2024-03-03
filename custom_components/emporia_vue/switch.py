@@ -136,7 +136,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
         return DeviceInfo(
-            identifiers={(DOMAIN, str(self._device_gid))},
+            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
             name=self._device.device_name,
             model=self._device.model,
             sw_version=self._device.firmware,
