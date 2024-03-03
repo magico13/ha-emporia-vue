@@ -1,10 +1,10 @@
 """Emporia Charger Entity."""
 from typing import Any, Optional
 
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from pyemvue import pyemvue
 from pyemvue.device import ChargerDevice, VueDevice
-
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
@@ -30,10 +30,16 @@ class EmporiaChargerEntity(CoordinatorEntity):
 
         self._attr_unit_of_measurement = units
         self._attr_device_class = device_class
-        self._attr_name = device.device_name
+        self._attr_has_entity_name = True
+        self._attr_name = None
 
     @property
-    def entity_registry_enabled_default(self):
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self._device
+
+    @property
+    def entity_registry_enabled_default(self) -> bool:
         """Return whether the entity should be enabled when first added to the entity registry."""
         return self._enabled_default
 
@@ -60,17 +66,14 @@ class EmporiaChargerEntity(CoordinatorEntity):
         return f"charger.emporia_vue.{self._device.device_gid}"
 
     @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
         """Return the device information."""
-        return {
-            "identifiers": {(DOMAIN, f"{self._device.device_gid}-1,2,3")},
-            "name": self._device.device_name + "-1,2,3",
-            "model": self._device.model,
-            "sw_version": self._device.firmware,
-            "manufacturer": "Emporia",
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device.device_gid)},
+            name=self._device.device_name,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+        )
 
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._device
+

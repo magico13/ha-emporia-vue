@@ -2,11 +2,12 @@
 import asyncio
 import logging
 
-from pyemvue import PyEmVue
 import voluptuous as vol
 
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.data_entry_flow import FlowResult
+from pyemvue import PyEmVue
 
 from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON
 
@@ -26,10 +27,9 @@ DATA_SCHEMA = vol.Schema(
 class VueHub:
     """Hub for the Emporia Vue Integration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize."""
         self.vue = PyEmVue()
-        pass
 
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
@@ -68,7 +68,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(self, user_input=None) -> FlowResult:
         """Handle the initial step."""
         errors = {}
         if user_input is not None:

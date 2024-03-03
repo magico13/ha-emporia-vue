@@ -7,14 +7,6 @@ from typing import Any, Optional
 
 import dateutil.relativedelta
 import dateutil.tz
-from pyemvue import PyEmVue
-from pyemvue.device import (
-    VueDevice,
-    VueDeviceChannel,
-    VueDeviceChannelUsage,
-    VueUsageDevice,
-)
-from pyemvue.enums import Scale
 import requests
 import voluptuous as vol
 
@@ -24,7 +16,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from pyemvue import PyEmVue
+from pyemvue.device import (
+    VueDevice,
+    VueDeviceChannel,
+    VueDeviceChannelUsage,
+    VueUsageDevice,
+)
+from pyemvue.enums import Scale
 
 from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
 
@@ -53,7 +54,7 @@ LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: Optional[datetime] = None
 
-async def async_setup(hass: HomeAssistant, config: dict):
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Emporia Vue component."""
     hass.data.setdefault(DOMAIN, {})
     conf = config.get(DOMAIN)
@@ -76,7 +77,7 @@ async def async_setup(hass: HomeAssistant, config: dict):
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
     global DEVICE_GIDS
     global DEVICE_INFORMATION
@@ -312,7 +313,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         _LOGGER.warning("Exception while setting up Emporia Vue. Will retry. %s", err)
         raise ConfigEntryNotReady(
             f"Exception while setting up Emporia Vue. Will retry. {err}"
-        )
+        ) from err
 
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
@@ -328,12 +329,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
     except Exception as err:
         _LOGGER.warning("Error setting up platforms: %s", err)
-        raise ConfigEntryNotReady(f"Error setting up platforms: {err}")
+        raise ConfigEntryNotReady(f"Error setting up platforms: {err}") from err
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = all(
         await asyncio.gather(
@@ -383,7 +384,7 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
         return data
     except Exception as err:
         _LOGGER.error("Error communicating with Emporia API: %s", err)
-        raise UpdateFailed(f"Error communicating with Emporia API: {err}")
+        raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
 
 
 def flatten_usage_data(
@@ -429,7 +430,7 @@ async def parse_flattened_usage_data(
             identifier = make_channel_id(info_channel, scale)
             channel_num = info_channel.channel_num
             channel = (
-                flattened_data[identifier] if identifier in flattened_data else None
+                flattened_data.get(identifier, None)
             )
             if not channel:
                 _LOGGER.info(
