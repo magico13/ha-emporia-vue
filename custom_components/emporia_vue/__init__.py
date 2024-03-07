@@ -1,4 +1,5 @@
 """The Emporia Vue integration."""
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
@@ -55,6 +56,7 @@ LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: Optional[datetime] = None
 
+
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Emporia Vue component."""
     hass.data.setdefault(DOMAIN, {})
@@ -79,6 +81,11 @@ async def async_setup(hass: HomeAssistant, config: dict):
     return True
 
 
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up Emporia Vue from a config entry."""
     global DEVICE_GIDS
@@ -86,14 +93,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     DEVICE_GIDS = []
     DEVICE_INFORMATION = {}
 
-    entry_data = entry.data
-    email = entry_data[CONF_EMAIL]
-    password = entry_data[CONF_PASSWORD]
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
+    options_data = entry.options
+    email = entry.data[CONF_EMAIL]
+    password = entry.data[CONF_PASSWORD]
     vue = PyEmVue()
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(None, vue.login, email, password)
-        #result = await loop.run_in_executor(None, vue.login_simulator, "http://localhost:8000", email, password)
+        # result = await loop.run_in_executor(None, vue.login_simulator, "http://localhost:8000", email, password)
         if not result:
             raise Exception("Could not authenticate with Emporia API")
     except Exception:
@@ -189,7 +198,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             return LAST_DAY_DATA
 
         coordinator_1sec = None
-        if ENABLE_1S not in entry_data or entry_data[ENABLE_1S]:
+        if ENABLE_1S not in options_data or options_data[ENABLE_1S]:
             coordinator_1sec = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -202,7 +211,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             await coordinator_1sec.async_config_entry_first_refresh()
             _LOGGER.info("1sec Update data: %s", coordinator_1sec.data)
         coordinator_1min = None
-        if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
+        if ENABLE_1M not in options_data or options_data[ENABLE_1M]:
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -215,7 +224,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             await coordinator_1min.async_config_entry_first_refresh()
             _LOGGER.info("1min Update data: %s", coordinator_1min.data)
         coordinator_1mon = None
-        if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
+        if ENABLE_1MON not in options_data or options_data[ENABLE_1MON]:
             coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -229,7 +238,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             _LOGGER.info("1mon Update data: %s", coordinator_1mon.data)
 
         coordinator_day_sensor = None
-        if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
+        if ENABLE_1D not in options_data or options_data[ENABLE_1D]:
             coordinator_day_sensor = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
@@ -314,7 +323,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
             try:
                 updated_charger = await loop.run_in_executor(
-                    None, vue.update_charger, charger_info.ev_charger, state.state == "on", current
+                    None,
+                    vue.update_charger,
+                    charger_info.ev_charger,
+                    state.state == "on",
+                    current,
                 )
                 DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
                 # update the state of the charger entity using the updated data
@@ -324,7 +337,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     newAttributes = state.attributes.copy()
                     newAttributes["charging_rate"] = updated_charger.charging_rate
                     # good enough for now, update the state in the registry
-                    hass.states.async_set(charger_entity.entity_id, newState, newAttributes)
+                    hass.states.async_set(
+                        charger_entity.entity_id, newState, newAttributes
+                    )
 
             except requests.exceptions.HTTPError as err:
                 _LOGGER.error(
@@ -520,7 +535,9 @@ async def parse_flattened_usage_data(
         # When we're done handling the unused data we need to rerun the update
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
-            await parse_flattened_usage_data(flattened_data, scale, data, requested_time, data_time)
+            await parse_flattened_usage_data(
+                flattened_data, scale, data, requested_time, data_time
+            )
 
 
 async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
@@ -564,16 +581,16 @@ async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
                 )
             )
 
-                # register the entity
-                # registry = await async_get_registry(hass)
-                # registry.async_get_or_create(
-                #     domain='your_domain',
-                #     platform='your_platform',
-                #     unique_id=entity_id,
-                #     name=entity_name,
-                #     config_entry=config_entry,
-                #     device_id=device_id,
-                # )
+            # register the entity
+            # registry = await async_get_registry(hass)
+            # registry.async_get_or_create(
+            #     domain='your_domain',
+            #     platform='your_platform',
+            #     unique_id=entity_id,
+            #     name=entity_name,
+            #     config_entry=config_entry,
+            #     device_id=device_id,
+            # )
             return True
     return False
 

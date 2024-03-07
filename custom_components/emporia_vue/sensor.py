@@ -22,6 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 # def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
     """Set up the sensor platform."""
+    coordinator_1sec = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1sec"]
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
     coordinator_1mon = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1mon"]
     coordinator_day_sensor = hass.data[DOMAIN][config_entry.entry_id][
@@ -29,6 +30,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entitie
     ]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+
+    if coordinator_1sec:
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1sec, id)
+            for _, id in enumerate(coordinator_1sec.data)
+        )
 
     if coordinator_1min:
         async_add_entities(

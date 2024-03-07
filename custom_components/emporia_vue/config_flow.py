@@ -1,4 +1,5 @@
 """Config flow for Emporia Vue integration."""
+
 import asyncio
 import logging
 
@@ -19,7 +20,7 @@ DATA_SCHEMA = vol.Schema(
         vol.Optional(ENABLE_1S, default=False): bool,
         vol.Optional(ENABLE_1M, default=True): bool,
         vol.Optional(ENABLE_1D, default=True): bool,
-        vol.Optional(ENABLE_1MON, default=True): bool
+        vol.Optional(ENABLE_1MON, default=True): bool,
     }
 )
 
@@ -60,7 +61,7 @@ async def validate_input(hass: core.HomeAssistant, data):
         ENABLE_1S: data[ENABLE_1S],
         ENABLE_1M: data[ENABLE_1M],
         ENABLE_1D: data[ENABLE_1D],
-        ENABLE_1MON: data[ENABLE_1MON]
+        ENABLE_1MON: data[ENABLE_1MON],
     }
 
 
@@ -76,11 +77,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
-                #prevent setting up the same account twice
+                # prevent setting up the same account twice
                 await self.async_set_unique_id(info["gid"])
                 self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(title=info["title"], data=user_input)
+                return self.async_create_entry(
+                    title=info["title"],
+                    data=user_input,
+                    options=user_input,
+                )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -93,6 +98,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
         )
 
+    @staticmethod
+    @core.callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Create the options flow."""
+        return OptionsFlowHandler(config_entry)
+
 
 class CannotConnect(exceptions.HomeAssistantError):
     """Error to indicate we cannot connect."""
@@ -100,3 +113,36 @@ class CannotConnect(exceptions.HomeAssistantError):
 
 class InvalidAuth(exceptions.HomeAssistantError):
     """Error to indicate there is invalid auth."""
+
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle a options flow for Emporia Vue."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        ENABLE_1S, default=self.config_entry.options.get(ENABLE_1S)
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1M, default=self.config_entry.options.get(ENABLE_1M)
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1D, default=self.config_entry.options.get(ENABLE_1D)
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1MON, default=self.config_entry.options.get(ENABLE_1MON)
+                    ): bool,
+                }
+            ),
+        )
