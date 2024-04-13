@@ -1,12 +1,20 @@
 """The Emporia Vue integration."""
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 import logging
 import re
 from typing import Any, Optional
 
 import dateutil.relativedelta
 import dateutil.tz
+from pyemvue import PyEmVue
+from pyemvue.device import (
+    VueDevice,
+    VueDeviceChannel,
+    VueDeviceChannelUsage,
+    VueUsageDevice,
+)
+from pyemvue.enums import Scale
 import requests
 import voluptuous as vol
 
@@ -18,14 +26,6 @@ from homeassistant.helpers import entity_registry as er
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from pyemvue import PyEmVue
-from pyemvue.device import (
-    VueDevice,
-    VueDeviceChannel,
-    VueDeviceChannelUsage,
-    VueUsageDevice,
-)
-from pyemvue.enums import Scale
 
 from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
 
@@ -48,8 +48,9 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "switch"]
 
-DEVICE_GIDS: list[int] = []
+DEVICE_GIDS: list[str] = []
 DEVICE_INFORMATION: dict[int, VueDevice] = {}
+DEVICES_ONLINE: list[str] = []
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: Optional[datetime] = None
@@ -93,16 +94,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         result = await loop.run_in_executor(None, vue.login, email, password)
         #result = await loop.run_in_executor(None, vue.login_simulator, "http://localhost:8000", email, password)
         if not result:
-            raise Exception("Could not authenticate with Emporia API")
-    except Exception:
-        _LOGGER.error("Could not authenticate with Emporia API")
+            _LOGGER.error("Failed to login to Emporia Vue")
+            return False
+    except Exception as err:
+        _LOGGER.error("Failed to login to Emporia Vue: %s", err)
         return False
 
     try:
         devices = await loop.run_in_executor(None, vue.get_devices)
         for device in devices:
-            if device.device_gid not in DEVICE_GIDS:
-                DEVICE_GIDS.append(device.device_gid)
+            if str(device.device_gid) not in DEVICE_GIDS:
+                DEVICE_GIDS.append(str(device.device_gid))
                 _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
                 # await loop.run_in_executor(None, vue.populate_device_properties, device)
                 DEVICE_INFORMATION[device.device_gid] = device
@@ -110,7 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 DEVICE_INFORMATION[device.device_gid].channels += device.channels
 
         total_channels = 0
-        for _, device in DEVICE_INFORMATION.items():
+        for device in DEVICE_INFORMATION.values():
             total_channels += len(device.channels)
         _LOGGER.info(
             "Found %s Emporia devices with %s total channels",
@@ -143,7 +145,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async def async_update_day_sensors():
             global LAST_DAY_UPDATE
             global LAST_DAY_DATA
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
                 LAST_DAY_UPDATE = now
@@ -358,7 +360,7 @@ async def update_sensors(vue: PyEmVue, scales: list[str]):
         data = {}
         loop = asyncio.get_event_loop()
         for scale in scales:
-            utcnow = datetime.now(timezone.utc)
+            utcnow = datetime.now(UTC)
             usage_dict = await loop.run_in_executor(
                 None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
             )
@@ -393,11 +395,11 @@ def flatten_usage_data(
 ) -> tuple[dict[str, VueDeviceChannelUsage], datetime]:
     """Flattens the raw usage data into a dictionary of channel ids and usage info."""
     flattened: dict[str, VueDeviceChannelUsage] = {}
-    data_time: datetime = datetime.now(timezone.utc)
-    for _, usage in usage_devices.items():
+    data_time: datetime = datetime.now(UTC)
+    for usage in usage_devices.values():
         data_time = usage.timestamp or data_time
         if usage.channels:
-            for _, channel in usage.channels.items():
+            for channel in usage.channels.values():
                 identifier = make_channel_id(channel, scale)
                 flattened[identifier] = channel
                 if channel.nested_devices:
@@ -430,7 +432,7 @@ async def parse_flattened_usage_data(
             identifier = make_channel_id(info_channel, scale)
             channel_num = info_channel.channel_num
             channel = (
-                flattened_data.get(identifier, None)
+                flattened_data.get(identifier)
             )
             if not channel:
                 _LOGGER.info(
@@ -484,7 +486,7 @@ async def parse_flattened_usage_data(
             str(unused_data),
         )
         channels_were_added = False
-        for _, channel in unused_data.items():
+        for channel in unused_data.values():
             channels_were_added |= await handle_special_channels_for_device(channel)
             # we'll also need to register these entities I think. They might show up automatically on the first run
         # When we're done handling the unused data we need to rerun the update
@@ -565,7 +567,7 @@ def change_time_to_local(time: datetime, tz_string: str):
     tz_info = dateutil.tz.gettz(tz_string)
     if not time.tzinfo or time.tzinfo.utcoffset(time) is None:
         # unaware, assume it's already utc
-        time = time.replace(tzinfo=timezone.utc)
+        time = time.replace(tzinfo=UTC)
     return time.astimezone(tz_info)
 
 

@@ -7,7 +7,6 @@ import voluptuous as vol
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
-from pyemvue import PyEmVue
 
 from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON
 
@@ -34,8 +33,7 @@ class VueHub:
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.vue.login, username, password)
-        return result
+        return await loop.run_in_executor(None, self.vue.login, username, password)
 
 
 async def validate_input(hass: core.HomeAssistant, data):

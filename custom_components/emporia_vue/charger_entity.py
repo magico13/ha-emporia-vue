@@ -1,10 +1,11 @@
 """Emporia Charger Entity."""
 from typing import Any, Optional
 
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from pyemvue import pyemvue
 from pyemvue.device import ChargerDevice, VueDevice
+
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
