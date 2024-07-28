@@ -18,10 +18,13 @@ Setting up a custom repository is done by:
 
 1. Go into HACS from the side bar.
 2. Click into Integrations.
-3. Click the 3-dot menu in the top right and select `Custom repositories`
-4. In the UI that opens, copy and paste the [url for this github repo](https://github.com/magico13/ha-emporia-vue) into the `Add custom repository URL` field.
-5. Set the category to `Integration`.
-6. Click the `Add` button. Further configuration is done within the Integrations configuration in Home Assistant. You may need to restart home assistant and clear your browser cache before it appears, try ctrl+shift+r if you don't see it in the configuration list.
+3. Click the `+Explorer & Download Repositories`
+4. In the UI that opens, enter `ha-emporia-vue` into the `Search for repository` field.
+5. Pick `Emporia View` from the results.
+6. Click the `Download` button.
+7. The latest version is auto-selected.  Click the `Download` link.
+8. Restart Home Assistant for the HACS integration to be applied.
+9. Further configuration is done within the Integrations configuration in Home Assistant. You may need to restart home assistant and clear your browser cache before it appears, try ctrl+shift+r if you don't see it in the configuration list.
 
 ![hacs1](images/hacs1.PNG)
 ![hacs2](images/hacs2.PNG)
