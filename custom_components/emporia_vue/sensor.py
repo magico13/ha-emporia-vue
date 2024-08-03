@@ -1,7 +1,10 @@
 """Platform for sensor integration."""
+
 from datetime import datetime
 import logging
-from typing import Optional
+
+from pyemvue.device import VueDevice, VueDeviceChannel
+from pyemvue.enums import Scale
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -14,8 +17,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from pyemvue.device import VueDevice, VueDeviceChannel
-from pyemvue.enums import Scale
 
 from .const import DOMAIN
 
@@ -24,10 +25,10 @@ _LOGGER = logging.getLogger(__name__)
 
 # def setup_platform(hass, config, add_entities, discovery_info=None):
 async def async_setup_entry(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback
-    ) -> None:
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up the sensor platform."""
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
     coordinator_1mon = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1mon"]
@@ -39,20 +40,20 @@ async def async_setup_entry(
 
     if coordinator_1min:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, id)
-            for _, id in enumerate(coordinator_1min.data)
+            CurrentVuePowerSensor(coordinator_1min, identifier)
+            for _, identifier in enumerate(coordinator_1min.data)
         )
 
     if coordinator_1mon:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_1mon, id)
-            for _, id in enumerate(coordinator_1mon.data)
+            CurrentVuePowerSensor(coordinator_1mon, identifier)
+            for _, identifier in enumerate(coordinator_1mon.data)
         )
 
     if coordinator_day_sensor:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_day_sensor, id)
-            for _, id in enumerate(coordinator_day_sensor.data)
+            CurrentVuePowerSensor(coordinator_day_sensor, identifier)
+            for _, identifier in enumerate(coordinator_day_sensor.data)
         )
 
 
@@ -67,7 +68,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         device_gid: int = coordinator.data[identifier]["device_gid"]
         channel_num: str = coordinator.data[identifier]["channel_num"]
         self._device: VueDevice = coordinator.data[identifier]["info"]
-        final_channel: Optional[VueDeviceChannel] = None
+        final_channel: VueDeviceChannel | None = None
         if self._device is not None:
             for channel in self._device.channels:
                 if channel.channel_num == channel_num:
@@ -141,7 +142,9 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         elif self._scale == Scale.SECOND.value:
             usage = 3600 * 1000 * usage  # convert to rate
         elif self._scale == Scale.MINUTES_15.value:
-            usage = 4 * 1000 * usage # this might never be used but for safety, convert to rate
+            usage = (
+                4 * 1000 * usage
+            )  # this might never be used but for safety, convert to rate
         return usage
 
     def scale_is_energy(self):
