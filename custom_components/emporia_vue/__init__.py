@@ -369,9 +369,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     try:
         for component in PLATFORMS:
-            hass.async_create_task(
-                hass.config_entries.async_forward_entry_setup(entry, component)
-            )
+            await hass.config_entries.async_forward_entry_setup(entry, component)
     except Exception as err:
         _LOGGER.warning("Error setting up platforms: %s", err)
         raise ConfigEntryNotReady(f"Error setting up platforms: {err}")
@@ -461,10 +459,15 @@ async def parse_flattened_usage_data(
     data_time: datetime,
 ):
     """Loop through the device list and find the corresponding update data."""
+    loop = asyncio.get_event_loop()
     unused_data = flattened_data.copy()
     for gid, info in DEVICE_INFORMATION.items():
-        local_time = change_time_to_local(data_time, info.time_zone)
-        requested_time_local = change_time_to_local(requested_time, info.time_zone)
+        local_time = await loop.run_in_executor(
+            None, change_time_to_local, data_time, info.time_zone
+        )
+        requested_time_local = await loop.run_in_executor(
+            None, change_time_to_local, requested_time, info.time_zone
+        )
         if abs((local_time - requested_time_local).total_seconds()) > 30:
             _LOGGER.warning(
                 "More than 30 seconds have passed between the requested datetime and the returned datetime. Requested: %s Returned: %s",
