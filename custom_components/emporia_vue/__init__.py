@@ -368,8 +368,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     }
 
     try:
-        for component in PLATFORMS:
-            await hass.config_entries.async_forward_entry_setups(entry, component)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception as err:
         _LOGGER.warning("Error setting up platforms: %s", err)
         raise ConfigEntryNotReady(f"Error setting up platforms: {err}")
