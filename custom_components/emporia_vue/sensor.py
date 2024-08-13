@@ -87,17 +87,18 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
         self._iskwh = self.scale_is_energy()
 
         self._attr_has_entity_name = True
-        self._attr_suggested_display_precision = 3
         if self._iskwh:
             self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
             self._attr_device_class = SensorDeviceClass.ENERGY
             self._attr_state_class = SensorStateClass.TOTAL
-            self._attr_name = f"Energy {self._scale}"
+            self._attr_suggested_display_precision = 3
+            self._attr_name = f"Energy {self.scale_readable()}"
         else:
             self._attr_native_unit_of_measurement = UnitOfPower.WATT
             self._attr_device_class = SensorDeviceClass.POWER
             self._attr_state_class = SensorStateClass.MEASUREMENT
-            self._attr_name = f"Power {self._scale}"
+            self._attr_suggested_display_precision = 1
+            self._attr_name = f"Power {self.scale_readable()}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -154,3 +155,13 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             Scale.SECOND.value,
             Scale.MINUTES_15.value,
         )
+    
+    def scale_readable(self):
+        """Return a human readable scale."""
+        if self._scale == Scale.MINUTE.value:
+            return "Minute Average"
+        if self._scale == Scale.DAY.value:
+            return "Today"
+        if self._scale == Scale.MONTH.value:
+            return "This Month"
+        return self._scale
