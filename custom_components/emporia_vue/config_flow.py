@@ -1,4 +1,5 @@
 """Config flow for Emporia Vue integration."""
+
 import asyncio
 import logging
 
@@ -18,7 +19,7 @@ DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(ENABLE_1M, default=True): bool,
         vol.Optional(ENABLE_1D, default=True): bool,
-        vol.Optional(ENABLE_1MON, default=True): bool
+        vol.Optional(ENABLE_1MON, default=True): bool,
     }
 )
 
@@ -26,16 +27,14 @@ DATA_SCHEMA = vol.Schema(
 class VueHub:
     """Hub for the Emporia Vue Integration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize."""
         self.vue = PyEmVue()
-        pass
 
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.vue.login, username, password)
-        return result
+        return await loop.run_in_executor(None, self.vue.login, username, password)
 
 
 async def validate_input(hass: core.HomeAssistant, data):
@@ -58,7 +57,7 @@ async def validate_input(hass: core.HomeAssistant, data):
         "gid": f"{hub.vue.customer.customer_gid}",
         ENABLE_1M: data[ENABLE_1M],
         ENABLE_1D: data[ENABLE_1D],
-        ENABLE_1MON: data[ENABLE_1MON]
+        ENABLE_1MON: data[ENABLE_1MON],
     }
 
 
@@ -68,13 +67,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
-                #prevent setting up the same account twice
+                # prevent setting up the same account twice
                 await self.async_set_unique_id(info["gid"])
                 self._abort_if_unique_id_configured()
 
