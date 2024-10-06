@@ -1,6 +1,12 @@
-.vscode
+/.vscode/*
 .vs
 **/__pycache__
 /dist
 /build
 *.egg-info
+
+/config
+/.venv
+
+!/.vscode/settings.json
+!/.vscode/launch.json
