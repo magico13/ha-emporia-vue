@@ -1,11 +1,12 @@
 """Emporia Charger Entity."""
-from typing import Any, Optional
 
-from pyemvue import pyemvue
-from pyemvue.device import ChargerDevice, VueDevice
+from functools import cached_property
+from typing import Any, Optional
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from pyemvue import pyemvue
+from pyemvue.device import ChargerDevice, VueDevice
 
 from .const import DOMAIN
 
@@ -25,9 +26,9 @@ class EmporiaChargerEntity(CoordinatorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._coordinator = coordinator
-        self._device = device
-        self._vue = vue
-        self._enabled_default = enabled_default
+        self._device: VueDevice = device
+        self._vue: pyemvue.PyEmVue = vue
+        self._enabled_default: bool = enabled_default
 
         self._attr_unit_of_measurement = units
         self._attr_device_class = device_class
@@ -37,14 +38,14 @@ class EmporiaChargerEntity(CoordinatorEntity):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device
+        return self._device is not None
 
-    @property
+    @cached_property
     def entity_registry_enabled_default(self) -> bool:
         """Return whether the entity should be enabled when first added to the entity registry."""
         return self._enabled_default
 
-    @property
+    @cached_property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the device."""
         data: ChargerDevice = self._coordinator.data[self._device.device_gid]
@@ -61,12 +62,12 @@ class EmporiaChargerEntity(CoordinatorEntity):
             }
         return {}
 
-    @property
+    @cached_property
     def unique_id(self) -> str:
         """Unique ID for the charger."""
         return f"charger.emporia_vue.{self._device.device_gid}"
 
-    @property
+    @cached_property
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
         return DeviceInfo(
@@ -76,5 +77,3 @@ class EmporiaChargerEntity(CoordinatorEntity):
             sw_version=self._device.firmware,
             manufacturer="Emporia",
         )
-
-

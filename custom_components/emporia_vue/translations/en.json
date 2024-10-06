@@ -15,7 +15,19 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "enable_1s": "Power Second Average Sensor",
+                    "password": "Password"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "data": {
+                    "email": "Email",
+                    "enable_1d": "Energy Today Sensor",
+                    "enable_1m": "Power Minute Average Sensor",
+                    "enable_1mon": "Energy This Month Sensor",
                     "password": "Password"
                 }
             }
