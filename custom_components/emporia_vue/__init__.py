@@ -472,8 +472,9 @@ async def parse_flattened_usage_data(
                     fixed_usage,
                 )
 
+            bidirectional = "bidirectional" in info_channel.type.lower() or "merged" in info_channel.type.lower()
             fixed_usage = fix_usage_sign(
-                channel_num, fixed_usage, "bidirectional" in info_channel.type.lower()
+                channel_num, fixed_usage, bidirectional
             )
 
             data[identifier] = {
