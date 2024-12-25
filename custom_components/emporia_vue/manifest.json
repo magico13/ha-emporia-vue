@@ -11,6 +11,6 @@
   "issue_tracker": "https://github.com/magico13/ha-emporia-vue/issues",
   "requirements": ["pyemvue==0.18.6"],
   "ssdp": [],
-  "version": "0.10.0",
+  "version": "0.10.1",
   "zeroconf": []
 }
