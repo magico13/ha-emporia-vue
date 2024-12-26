@@ -1,10 +1,8 @@
 """Platform for sensor integration."""
 
-from datetime import datetime
 import logging
-
-from pyemvue.device import VueDevice, VueDeviceChannel
-from pyemvue.enums import Scale
+from datetime import datetime
+from functools import cached_property
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -17,10 +15,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from pyemvue.device import VueDevice, VueDeviceChannel
+from pyemvue.enums import Scale
 
 from .const import DOMAIN
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 # def setup_platform(hass, config, add_entities, discovery_info=None):
@@ -57,7 +57,7 @@ async def async_setup_entry(
         )
 
 
-class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
+class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     """Representation of a Vue Sensor's current power."""
 
     def __init__(self, coordinator, identifier) -> None:
@@ -100,7 +100,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             self._attr_suggested_display_precision = 1
             self._attr_name = f"Power {self.scale_readable()}"
 
-    @property
+    @cached_property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         device_name = self._channel.name or self._device.device_name
@@ -114,14 +114,14 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             manufacturer="Emporia",
         )
 
-    @property
+    @cached_property
     def last_reset(self) -> datetime | None:
         """The time when the daily/monthly sensor was reset. Midnight local time."""
         if self._id in self.coordinator.data:
             return self.coordinator.data[self._id]["reset"]
         return None
 
-    @property
+    @cached_property
     def native_value(self) -> float | None:
         """Return the state of the sensor."""
         if self._id in self.coordinator.data:
@@ -129,12 +129,18 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             return self.scale_usage(usage) if usage is not None else None
         return None
 
-    @property
+    @cached_property
     def unique_id(self) -> str:
         """Unique ID for the sensor."""
         if self._scale == Scale.MINUTE.value:
-            return f"sensor.emporia_vue.instant.{self._channel.device_gid}-{self._channel.channel_num}"
-        return f"sensor.emporia_vue.{self._scale}.{self._channel.device_gid}-{self._channel.channel_num}"
+            return (
+                "sensor.emporia_vue.instant."
+                f"{self._channel.device_gid}-{self._channel.channel_num}"
+            )
+        return (
+            "sensor.emporia_vue.{self._scale}."
+            f"{self._channel.device_gid}-{self._channel.channel_num}"
+        )
 
     def scale_usage(self, usage):
         """Scales the usage to the correct timescale and magnitude."""
@@ -155,7 +161,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):
             Scale.SECOND.value,
             Scale.MINUTES_15.value,
         )
-    
+
     def scale_readable(self):
         """Return a human readable scale."""
         if self._scale == Scale.MINUTE.value:

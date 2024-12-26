@@ -3,25 +3,14 @@
 import asyncio
 import logging
 
-from pyemvue import PyEmVue
 import voluptuous as vol
-
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from pyemvue import PyEmVue
 
-from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON
+from .const import DOMAIN, DOMAIN_SCHEMA, ENABLE_1D, ENABLE_1M, ENABLE_1MON
 
-_LOGGER = logging.getLogger(__name__)
-
-DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_EMAIL): str,
-        vol.Required(CONF_PASSWORD): str,
-        vol.Optional(ENABLE_1M, default=True): bool,
-        vol.Optional(ENABLE_1D, default=True): bool,
-        vol.Optional(ENABLE_1MON, default=True): bool,
-    }
-)
+_LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 class VueHub:
@@ -33,23 +22,26 @@ class VueHub:
 
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
-        loop = asyncio.get_event_loop()
+        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.vue.login, username, password)
 
 
-async def validate_input(hass: core.HomeAssistant, data):
+async def validate_input(data: dict):
     """Validate the user input allows us to connect.
 
     Data has the keys from DATA_SCHEMA with values provided by the user.
     """
     hub = VueHub()
     if not await hub.authenticate(data[CONF_EMAIL], data[CONF_PASSWORD]):
-        raise InvalidAuth
+        raise InvalidAuth()
 
     # If you cannot connect:
     # throw CannotConnect
     # If the authentication is wrong:
     # InvalidAuth
+
+    if not hub.vue.customer:
+        raise InvalidAuth()
 
     # Return info that you want to store in the config entry.
     return {
@@ -67,17 +59,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
+    async def async_step_user(self, user_input=None) -> config_entries.FlowResult:
         """Handle the initial step."""
         errors = {}
         if user_input is not None:
             try:
-                info = await validate_input(self.hass, user_input)
+                info = await validate_input(user_input)
                 # prevent setting up the same account twice
                 await self.async_set_unique_id(info["gid"])
                 self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(title=info["title"], data=user_input)
+                return self.async_create_entry(
+                    title=info["title"], data=user_input, options=user_input
+                )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -87,12 +81,53 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user", data_schema=DOMAIN_SCHEMA, errors=errors
         )
+
+    @staticmethod
+    @core.callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Create the options flow."""
+        return OptionsFlowHandler(config_entry)
 
 
 class CannotConnect(exceptions.HomeAssistantError):
     """Error to indicate we cannot connect."""
+
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle a options flow for Emporia Vue."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        self.config_entry: config_entries.ConfigEntry = config_entry
+
+    async def async_step_init(self, user_input=None) -> config_entries.FlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        ENABLE_1M,
+                        default=self.config_entry.options.get(ENABLE_1M, True),
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1D,
+                        default=self.config_entry.options.get(ENABLE_1D, True),
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1MON,
+                        default=self.config_entry.options.get(ENABLE_1MON, True),
+                    ): bool,
+                }
+            ),
+        )
 
 
 class InvalidAuth(exceptions.HomeAssistantError):
