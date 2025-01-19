@@ -5,7 +5,6 @@
         "data": {
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
-          "enable_1s": "One Second Sensor",
           "enable_1m": "One Minute Sensor",
           "enable_1d": "One Day Sensor",
           "enable_1mon": "One Month Sensor"
@@ -19,6 +18,19 @@
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "email": "[%key:common::config_flow::data::email%]",
+          "password": "[%key:common::config_flow::data::password%]",
+          "enable_1m": "One Minute Sensor",
+          "enable_1d": "One Day Sensor",
+          "enable_1mon": "One Month Sensor"
+        }
+      }
     }
   }
 }
