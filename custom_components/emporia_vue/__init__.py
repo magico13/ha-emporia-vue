@@ -1,21 +1,13 @@
 """The Emporia Vue integration."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta, tzinfo
 import logging
 import re
-from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
 import dateutil.relativedelta
 import dateutil.tz
-import requests
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, State
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
@@ -25,6 +17,19 @@ from pyemvue.device import (
     VueUsageDevice,
 )
 from pyemvue.enums import Scale
+import requests
+
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.core import HomeAssistant, State
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
 
@@ -79,10 +84,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         result: bool = await loop.run_in_executor(None, vue.login, email, password)
         if not result:
             _LOGGER.error("Failed to login to Emporia Vue")
-            return False
+            raise ConfigEntryAuthFailed("Failed to login to Emporia Vue")
+    except ConfigEntryAuthFailed:
+        raise
     except Exception as err:  # pylint: disable=broad-exception-caught
         _LOGGER.error("Failed to login to Emporia Vue: %s", err)
-        return False
+        raise ConfigEntryAuthFailed("Failed to login to Emporia Vue") from err
 
     try:
         devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
@@ -459,10 +466,11 @@ async def parse_flattened_usage_data(
                     fixed_usage,
                 )
 
-            bidirectional = "bidirectional" in info_channel.type.lower() or "merged" in info_channel.type.lower()
-            fixed_usage = fix_usage_sign(
-                channel_num, fixed_usage, bidirectional
+            bidirectional = (
+                "bidirectional" in info_channel.type.lower()
+                or "merged" in info_channel.type.lower()
             )
+            fixed_usage = fix_usage_sign(channel_num, fixed_usage, bidirectional)
 
             data[identifier] = {
                 "device_gid": gid,

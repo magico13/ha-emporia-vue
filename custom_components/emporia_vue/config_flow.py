@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+from typing import Any
 
+from pyemvue import PyEmVue
 import voluptuous as vol
+
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from pyemvue import PyEmVue
 
 from .const import DOMAIN, DOMAIN_SCHEMA, ENABLE_1D, ENABLE_1M, ENABLE_1MON
 
@@ -33,7 +35,7 @@ async def validate_input(data: dict):
     """
     hub = VueHub()
     if not await hub.authenticate(data[CONF_EMAIL], data[CONF_PASSWORD]):
-        raise InvalidAuth()
+        raise InvalidAuth
 
     # If you cannot connect:
     # throw CannotConnect
@@ -41,7 +43,7 @@ async def validate_input(data: dict):
     # InvalidAuth
 
     if not hub.vue.customer:
-        raise InvalidAuth()
+        raise InvalidAuth
 
     # Return info that you want to store in the config entry.
     return {
@@ -84,6 +86,49 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=DOMAIN_SCHEMA, errors=errors
         )
 
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> config_entries.FlowResult:
+        """Perform reauthentication upon an API authentication error."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Confirm reauthentication dialog."""
+        errors: dict[str, str] = {}
+        if user_input:
+            gid = 0
+            try:
+                hub = VueHub()
+                if not await hub.authenticate(
+                    user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                ):
+                    raise InvalidAuth
+                gid = hub.vue.customer.customer_gid
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            else:
+                await self.async_set_unique_id(str(gid))
+                self._abort_if_unique_id_mismatch(reason="wrong_account")
+                return self.async_update_reload_and_abort(
+                    self._get_reauth_entry(),
+                    data_updates={
+                        CONF_EMAIL: user_input[CONF_EMAIL],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_EMAIL): str,
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            errors=errors,
+        )
+
     @staticmethod
     @core.callback
     def async_get_options_flow(
@@ -98,11 +143,7 @@ class CannotConnect(exceptions.HomeAssistantError):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle a options flow for Emporia Vue."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry: config_entries.ConfigEntry = config_entry
+    """Handle an options flow for Emporia Vue."""
 
     async def async_step_init(self, user_input=None) -> config_entries.FlowResult:
         """Manage the options."""
