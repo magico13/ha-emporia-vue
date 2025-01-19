@@ -138,7 +138,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
                 f"{self._channel.device_gid}-{self._channel.channel_num}"
             )
         return (
-            "sensor.emporia_vue.{self._scale}."
+            f"sensor.emporia_vue.{self._scale}."
             f"{self._channel.device_gid}-{self._channel.channel_num}"
         )
 

@@ -5,9 +5,9 @@
         "data": {
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
-          "enable_1m": "One Minute Sensor",
-          "enable_1d": "One Day Sensor",
-          "enable_1mon": "One Month Sensor"
+          "enable_1m": "Power Minute Average Sensor",
+          "enable_1d": "Energy Today Sensor",
+          "enable_1mon": "Energy This Month Sensor"
         }
       }
     },
@@ -26,9 +26,9 @@
         "data": {
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
-          "enable_1m": "One Minute Sensor",
-          "enable_1d": "One Day Sensor",
-          "enable_1mon": "One Month Sensor"
+          "enable_1m": "Power Minute Average Sensor",
+          "enable_1d": "Energy Today Sensor",
+          "enable_1mon": "Energy This Month Sensor"
         }
       }
     }
