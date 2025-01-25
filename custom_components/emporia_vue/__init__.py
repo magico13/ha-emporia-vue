@@ -31,7 +31,15 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
+from .const import (
+    CONFIG_TITLE,
+    CUSTOMER_GID,
+    DOMAIN,
+    ENABLE_1D,
+    ENABLE_1M,
+    ENABLE_1MON,
+    VUE_DATA,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -43,7 +51,6 @@ DEVICES_ONLINE: list[str] = []
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
-
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Emporia Vue component."""
@@ -62,6 +69,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
+                CUSTOMER_GID: conf[CUSTOMER_GID],
+                CONFIG_TITLE: conf[CONFIG_TITLE],
             },
         )
     )
@@ -76,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     DEVICE_INFORMATION = {}
 
     entry_data = entry.data
+    _LOGGER.warning("Setting up Emporia Vue with entry data: %s", entry_data)
     email: str = entry_data[CONF_EMAIL]
     password: str = entry_data[CONF_PASSWORD]
     vue = PyEmVue()
@@ -551,10 +561,11 @@ def make_channel_id(channel: VueDeviceChannel, scale: str) -> str:
 
 
 def fix_usage_sign(channel_num: str, usage: float, bidirectional: bool) -> float:
+    """If the channel is not '1,2,3' or 'Balance' we need it to be positive.
+
+    (see https://github.com/magico13/ha-emporia-vue/issues/57)
     """
-    If the channel is not '1,2,3' or 'Balance' we need it to be positive
-    (see https://github.com/magico13/ha-emporia-vue/issues/57).
-    """
+
     if usage and not bidirectional and channel_num not in ["1,2,3", "Balance"]:
         # With bidirectionality, we need to also check if bidirectional. If yes,
         # we either don't abs, or we flip the sign.

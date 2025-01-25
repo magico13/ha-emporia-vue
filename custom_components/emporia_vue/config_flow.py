@@ -7,10 +7,18 @@ from typing import Any
 from pyemvue import PyEmVue
 import voluptuous as vol
 
-from homeassistant import config_entries, core, exceptions
+from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
-from .const import DOMAIN, DOMAIN_SCHEMA, ENABLE_1D, ENABLE_1M, ENABLE_1MON
+from .const import (
+    CONFIG_TITLE,
+    CUSTOMER_GID,
+    DOMAIN,
+    ENABLE_1D,
+    ENABLE_1M,
+    ENABLE_1MON,
+    USER_CONFIG_SCHEMA,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -47,11 +55,13 @@ async def validate_input(data: dict):
 
     # Return info that you want to store in the config entry.
     return {
-        "title": f"Customer {hub.vue.customer.customer_gid}",
-        "gid": f"{hub.vue.customer.customer_gid}",
+        CONFIG_TITLE: f"Customer {hub.vue.customer.customer_gid}",
+        CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
         ENABLE_1M: data[ENABLE_1M],
         ENABLE_1D: data[ENABLE_1D],
         ENABLE_1MON: data[ENABLE_1MON],
+        CONF_EMAIL: data[CONF_EMAIL],
+        CONF_PASSWORD: data[CONF_PASSWORD],
     }
 
 
@@ -61,7 +71,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None) -> config_entries.FlowResult:
+    async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
         if user_input is not None:
@@ -72,7 +82,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=info["title"], data=user_input, options=user_input
+                    title=info["title"], data=user_input
                 )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -83,20 +93,66 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user", data_schema=DOMAIN_SCHEMA, errors=errors
+            step_id="user", data_schema=USER_CONFIG_SCHEMA, errors=errors
+        )
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+        """Handle the reconfiguration step."""
+        current_config = self._get_reconfigure_entry()
+        if user_input is not None:
+            _LOGGER.warning("User input on reconfigure was the following: %s", user_input)
+            _LOGGER.warning("Current config is: %s", current_config.data)
+            info = current_config.data
+            # if gid is not in current config, reauth and get gid again
+            if CUSTOMER_GID not in current_config.data or not current_config.data[CUSTOMER_GID]:
+                info = await validate_input(current_config.data) # type: ignore
+
+            await self.async_set_unique_id(info[CUSTOMER_GID])
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            data = {
+                ENABLE_1M: user_input[ENABLE_1M],
+                ENABLE_1D: user_input[ENABLE_1D],
+                ENABLE_1MON: user_input[ENABLE_1MON],
+                CUSTOMER_GID: info[CUSTOMER_GID],
+                CONFIG_TITLE: info[CONFIG_TITLE],
+            }
+            return self.async_update_reload_and_abort(
+                self._get_reconfigure_entry(),
+                data_updates=data,
+            )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        ENABLE_1M,
+                        default=current_config.data.get(ENABLE_1M, True),
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1D,
+                        default=current_config.data.get(ENABLE_1D, True),
+                    ): bool,
+                    vol.Optional(
+                        ENABLE_1MON,
+                        default=current_config.data.get(ENABLE_1MON, True),
+                    ): bool,
+                }
+            ),
         )
 
     async def async_step_reauth(
         self, entry_data: dict[str, Any]
-    ) -> config_entries.FlowResult:
+    ) -> config_entries.ConfigFlowResult:
         """Perform reauthentication upon an API authentication error."""
-        return await self.async_step_reauth_confirm()
+        return await self.async_step_reauth_confirm(entry_data)
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
+    ) -> config_entries.ConfigFlowResult:
         """Confirm reauthentication dialog."""
         errors: dict[str, str] = {}
+        existing_entry = self._get_reauth_entry()
         if user_input:
             gid = 0
             try:
@@ -112,7 +168,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(str(gid))
                 self._abort_if_unique_id_mismatch(reason="wrong_account")
                 return self.async_update_reload_and_abort(
-                    self._get_reauth_entry(),
+                    existing_entry,
                     data_updates={
                         CONF_EMAIL: user_input[CONF_EMAIL],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
@@ -122,54 +178,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_EMAIL): str,
+                    vol.Required(CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]): str,
                     vol.Required(CONF_PASSWORD): str,
                 }
             ),
             errors=errors,
         )
 
-    @staticmethod
-    @core.callback
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
-        """Create the options flow."""
-        return OptionsFlowHandler(config_entry)
-
-
 class CannotConnect(exceptions.HomeAssistantError):
     """Error to indicate we cannot connect."""
-
-
-class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle an options flow for Emporia Vue."""
-
-    async def async_step_init(self, user_input=None) -> config_entries.FlowResult:
-        """Manage the options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        ENABLE_1M,
-                        default=self.config_entry.options.get(ENABLE_1M, True),
-                    ): bool,
-                    vol.Optional(
-                        ENABLE_1D,
-                        default=self.config_entry.options.get(ENABLE_1D, True),
-                    ): bool,
-                    vol.Optional(
-                        ENABLE_1MON,
-                        default=self.config_entry.options.get(ENABLE_1MON, True),
-                    ): bool,
-                }
-            ),
-        )
-
 
 class InvalidAuth(exceptions.HomeAssistantError):
     """Error to indicate there is invalid auth."""

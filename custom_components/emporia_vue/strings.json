@@ -9,6 +9,15 @@
           "enable_1d": "Energy Today Sensor",
           "enable_1mon": "Energy This Month Sensor"
         }
+      },
+      "reconfigure": {
+        "enable_1m": "Power Minute Average Sensor",
+        "enable_1d": "Energy Today Sensor",
+        "enable_1mon": "Energy This Month Sensor"
+      },
+      "reauth_confirm": {
+        "title": "[%key:common::config_flow::title::reauth%]",
+        "description": "The Emporia Vue integration needs to re-authenticate your account"
       }
     },
     "error": {
@@ -17,20 +26,9 @@
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "email": "[%key:common::config_flow::data::email%]",
-          "password": "[%key:common::config_flow::data::password%]",
-          "enable_1m": "Power Minute Average Sensor",
-          "enable_1d": "Energy Today Sensor",
-          "enable_1mon": "Energy This Month Sensor"
-        }
-      }
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
     }
   }
 }
