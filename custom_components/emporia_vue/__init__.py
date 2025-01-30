@@ -91,7 +91,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
-        result: bool = await loop.run_in_executor(None, vue.login, email, password)
+        # support using the simulator by looking at the username
+        if email.startswith("vue_simulator@"):
+            host = email.split("@")[1]
+            result: bool = await loop.run_in_executor(None, vue.login_simulator, host)
+        else:
+            result: bool = await loop.run_in_executor(None, vue.login, email, password)
         if not result:
             _LOGGER.error("Failed to login to Emporia Vue")
             raise ConfigEntryAuthFailed("Failed to login to Emporia Vue")

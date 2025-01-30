@@ -33,6 +33,11 @@ class VueHub:
     async def authenticate(self, username, password) -> bool:
         """Test if we can authenticate with the host."""
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+        # support using the simulator by looking at the username
+        # if formatted like vue_simulator@localhost:8000 then use the simulator
+        if username.startswith("vue_simulator@"):
+            host = username.split("@")[1]
+            return await loop.run_in_executor(None, self.vue.login_simulator, host)
         return await loop.run_in_executor(None, self.vue.login, username, password)
 
 
@@ -78,11 +83,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 info = await validate_input(user_input)
                 # prevent setting up the same account twice
-                await self.async_set_unique_id(info["gid"])
+                await self.async_set_unique_id(info[CUSTOMER_GID])
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=info["title"], data=user_input
+                    title=info[CONFIG_TITLE], data=user_input
                 )
             except CannotConnect:
                 errors["base"] = "cannot_connect"

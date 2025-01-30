@@ -100,6 +100,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             self._attr_suggested_display_precision = 1
             self._attr_name = f"Power {self.scale_readable()}"
 
+    @property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         device_name = self._channel.name or self._device.device_name
@@ -113,12 +114,14 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             manufacturer="Emporia",
         )
 
+    @property
     def last_reset(self) -> datetime | None:
         """Reset time of the daily/monthly sensor. Midnight local time."""
         if self._id in self.coordinator.data:
             return self.coordinator.data[self._id]["reset"]
         return None
 
+    @property
     def native_value(self) -> float | None:
         """Return the state of the sensor."""
         if self._id in self.coordinator.data:
@@ -126,6 +129,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             return self.scale_usage(usage) if usage is not None else None
         return None
 
+    @property
     def unique_id(self) -> str:
         """Return the Unique ID for the sensor."""
         if self._scale == Scale.MINUTE.value:
