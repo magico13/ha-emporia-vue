@@ -11,13 +11,19 @@
         }
       },
       "reconfigure": {
-        "enable_1m": "Power Minute Average Sensor",
-        "enable_1d": "Energy Today Sensor",
-        "enable_1mon": "Energy This Month Sensor"
+        "data": {
+          "enable_1m": "[%key:component::emporia_vue::config::step::user::data::enable_1m%]",
+          "enable_1d": "[%key:component::emporia_vue::config::step::user::data::enable_1d%]",
+          "enable_1mon": "[%key:component::emporia_vue::config::step::user::data::enable_1mon%]"
+        }
       },
       "reauth_confirm": {
         "title": "[%key:common::config_flow::title::reauth%]",
-        "description": "The Emporia Vue integration needs to re-authenticate your account"
+        "description": "The Emporia Vue integration needs to re-authenticate your account",
+        "data": {
+          "email": "[%key:common::config_flow::data::email%]",
+          "password": "[%key:common::config_flow::data::password%]"
+        }
       }
     },
     "error": {

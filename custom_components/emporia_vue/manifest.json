@@ -4,16 +4,10 @@
   "codeowners": ["@magico13"],
   "config_flow": true,
   "single_config_entry": true,
-  "dependencies": [],
   "documentation": "https://github.com/magico13/ha-emporia-vue",
-  "homekit": {},
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/magico13/ha-emporia-vue/issues",
-  "requirements": [
-    "pyemvue@git+https://github.com/magico13/pyemvue.git@a3f9da4baa471d4aa32ca795756cb65c554ef89d"
-  ],
-  "ssdp": [],
-  "version": "0.10.2",
-  "zeroconf": []
+  "requirements": ["pyemvue==0.18.7"],
+  "version": "0.10.3"
 }

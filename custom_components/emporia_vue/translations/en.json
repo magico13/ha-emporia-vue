@@ -1,34 +1,40 @@
 {
-  "config": {
-    "step": {
-      "user": {
-        "data": {
-          "email": "Email",
-          "password": "Password",
-          "enable_1m": "Power Minute Average Sensor",
-          "enable_1d": "Energy Today Sensor",
-          "enable_1mon": "Energy This Month Sensor"
-        }
-      },
-      "reconfigure": {
-        "enable_1m": "Power Minute Average Sensor",
-        "enable_1d": "Energy Today Sensor",
-        "enable_1mon": "Energy This Month Sensor"
-      },
-      "reauth_confirm": {
-        "title": "[%key:common::config_flow::title::reauth%]",
-        "description": "The Emporia Vue integration needs to re-authenticate your account"
-      }
-    },
-    "error": {
-      "cannot_connect": "Failed to connect",
+    "config": {
+        "abort": {
+            "already_configured": "Device is already configured",
+            "reauth_successful": "Re-authentication was successful",
+            "reconfigure_successful": "Re-configuration was successful"
+        },
+        "error": {
+            "cannot_connect": "Failed to connect",
             "invalid_auth": "Invalid authentication",
             "unknown": "Unexpected error"
-    },
-    "abort": {
-      "already_configured": "Device is already configured",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+        },
+        "step": {
+            "reauth_confirm": {
+                "description": "The Emporia Vue integration needs to re-authenticate your account",
+                "title": "Authentication expired for {name}",
+                "data":{
+                    "email": "Email",
+                    "password": "Password"
+                }
+            },
+            "reconfigure": {
+                "data": {
+                    "enable_1d": "Energy Today Sensor",
+                    "enable_1m": "Power Minute Average Sensor",
+                    "enable_1mon": "Energy This Month Sensor"
+                }
+            },
+            "user": {
+                "data": {
+                    "email": "Email",
+                    "enable_1d": "Energy Today Sensor",
+                    "enable_1m": "Power Minute Average Sensor",
+                    "enable_1mon": "Energy This Month Sensor",
+                    "password": "Password"
+                }
+            }
+        }
     }
-  }
 }

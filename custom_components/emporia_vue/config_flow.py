@@ -1,6 +1,7 @@
 """Config flow for Emporia Vue integration."""
 
 import asyncio
+from collections.abc import Mapping
 import logging
 from typing import Any
 
@@ -60,7 +61,7 @@ async def validate_input(data: dict):
 
     # Return info that you want to store in the config entry.
     return {
-        CONFIG_TITLE: f"Customer {hub.vue.customer.customer_gid}",
+        CONFIG_TITLE: f"{hub.vue.customer.email} ({hub.vue.customer.customer_gid})",
         CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
         ENABLE_1M: data[ENABLE_1M],
         ENABLE_1D: data[ENABLE_1D],
@@ -101,7 +102,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=USER_CONFIG_SCHEMA, errors=errors
         )
 
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
         """Handle the reconfiguration step."""
         current_config = self._get_reconfigure_entry()
         if user_input is not None:
@@ -147,13 +148,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reauth(
-        self, entry_data: dict[str, Any]
+        self, entry_data: Mapping[str, Any]
     ) -> config_entries.ConfigFlowResult:
         """Perform reauthentication upon an API authentication error."""
         return await self.async_step_reauth_confirm(entry_data)
 
     async def async_step_reauth_confirm(
-        self, user_input: dict[str, Any] | None = None
+        self, user_input: Mapping[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Confirm reauthentication dialog."""
         errors: dict[str, str] = {}
@@ -164,7 +165,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 hub = VueHub()
                 if not await hub.authenticate(
                     user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
-                ):
+                ) or not hub.vue.customer:
                     raise InvalidAuth
                 gid = hub.vue.customer.customer_gid
             except InvalidAuth:
