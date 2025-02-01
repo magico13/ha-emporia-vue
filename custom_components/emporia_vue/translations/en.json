@@ -12,18 +12,19 @@
         },
         "step": {
             "reauth_confirm": {
-                "description": "The Emporia Vue integration needs to re-authenticate your account",
-                "title": "Authentication expired for {name}",
-                "data":{
+                "data": {
                     "email": "Email",
                     "password": "Password"
-                }
+                },
+                "description": "The Emporia Vue integration needs to re-authenticate your account",
+                "title": "Authentication expired for {name}"
             },
             "reconfigure": {
                 "data": {
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
-                    "enable_1mon": "Energy This Month Sensor"
+                    "enable_1mon": "Energy This Month Sensor",
+                    "merged_behavior": "Merged Circuit Operation"
                 }
             },
             "user": {
@@ -32,6 +33,7 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
+                    "merged_behavior": "Merged Circuit Operation",
                     "password": "Password"
                 }
             }

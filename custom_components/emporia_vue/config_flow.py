@@ -10,6 +10,8 @@ import voluptuous as vol
 
 from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.selector import selector
 
 from .const import (
     CONFIG_TITLE,
@@ -18,7 +20,10 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
-    USER_CONFIG_SCHEMA,
+    MERGED_ABS,
+    MERGED_BEHAVIOR,
+    MERGED_INVERT,
+    MERGED_NONE,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -42,7 +47,7 @@ class VueHub:
         return await loop.run_in_executor(None, self.vue.login, username, password)
 
 
-async def validate_input(data: dict):
+async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect.
 
     Data has the keys from DATA_SCHEMA with values provided by the user.
@@ -59,15 +64,21 @@ async def validate_input(data: dict):
     if not hub.vue.customer:
         raise InvalidAuth
 
+    new_data = dict(data)
+
+    if MERGED_BEHAVIOR not in new_data:
+        new_data[MERGED_BEHAVIOR] = MERGED_INVERT
+
     # Return info that you want to store in the config entry.
     return {
         CONFIG_TITLE: f"{hub.vue.customer.email} ({hub.vue.customer.customer_gid})",
         CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
-        ENABLE_1M: data[ENABLE_1M],
-        ENABLE_1D: data[ENABLE_1D],
-        ENABLE_1MON: data[ENABLE_1MON],
-        CONF_EMAIL: data[CONF_EMAIL],
-        CONF_PASSWORD: data[CONF_PASSWORD],
+        ENABLE_1M: new_data[ENABLE_1M],
+        ENABLE_1D: new_data[ENABLE_1D],
+        ENABLE_1MON: new_data[ENABLE_1MON],
+        MERGED_BEHAVIOR: new_data[MERGED_BEHAVIOR],
+        CONF_EMAIL: new_data[CONF_EMAIL],
+        CONF_PASSWORD: new_data[CONF_PASSWORD],
     }
 
 
@@ -98,8 +109,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
+        config_schema = {
+            vol.Required(CONF_EMAIL): cv.string,
+            vol.Required(CONF_PASSWORD): cv.string,
+            vol.Optional(ENABLE_1M, default=True): cv.boolean,
+            vol.Optional(ENABLE_1D, default=True): cv.boolean,
+            vol.Optional(ENABLE_1MON, default=True): cv.boolean,
+        }
+
+        config_schema[vol.Required(MERGED_BEHAVIOR)] = selector({
+            "select": {
+                "options": [MERGED_INVERT, MERGED_ABS, MERGED_NONE],
+            }
+        })
+
         return self.async_show_form(
-            step_id="user", data_schema=USER_CONFIG_SCHEMA, errors=errors
+            step_id="user", data_schema=vol.Schema(config_schema), errors=errors
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
@@ -111,7 +136,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             info = current_config.data
             # if gid is not in current config, reauth and get gid again
             if CUSTOMER_GID not in current_config.data or not current_config.data[CUSTOMER_GID]:
-                info = await validate_input(current_config.data) # type: ignore
+                info = await validate_input(current_config.data)
 
             await self.async_set_unique_id(info[CUSTOMER_GID])
             self._abort_if_unique_id_mismatch(reason="wrong_account")
@@ -119,6 +144,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ENABLE_1M: user_input[ENABLE_1M],
                 ENABLE_1D: user_input[ENABLE_1D],
                 ENABLE_1MON: user_input[ENABLE_1MON],
+                MERGED_BEHAVIOR: user_input[MERGED_BEHAVIOR],
                 CUSTOMER_GID: info[CUSTOMER_GID],
                 CONFIG_TITLE: info[CONFIG_TITLE],
             }
@@ -127,24 +153,30 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data_updates=data,
             )
 
+        data_schema : dict[vol.Optional | vol.Required, Any] = {
+            vol.Optional(
+                ENABLE_1M,
+                default=current_config.data.get(ENABLE_1M, True),
+            ): cv.boolean,
+            vol.Optional(
+                ENABLE_1D,
+                default=current_config.data.get(ENABLE_1D, True),
+            ): cv.boolean,
+            vol.Optional(
+                ENABLE_1MON,
+                default=current_config.data.get(ENABLE_1MON, True),
+            ): cv.boolean,
+        }
+
+        data_schema[vol.Required(MERGED_BEHAVIOR)] = selector({
+            "select": {
+                "options": [MERGED_INVERT, MERGED_ABS, MERGED_NONE],
+            }
+        })
+
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        ENABLE_1M,
-                        default=current_config.data.get(ENABLE_1M, True),
-                    ): bool,
-                    vol.Optional(
-                        ENABLE_1D,
-                        default=current_config.data.get(ENABLE_1D, True),
-                    ): bool,
-                    vol.Optional(
-                        ENABLE_1MON,
-                        default=current_config.data.get(ENABLE_1MON, True),
-                    ): bool,
-                }
-            ),
+            data_schema=vol.Schema(data_schema),
         )
 
     async def async_step_reauth(
@@ -184,8 +216,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]): str,
-                    vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]): cv.string,
+                    vol.Required(CONF_PASSWORD): cv.string,
                 }
             ),
             errors=errors,
