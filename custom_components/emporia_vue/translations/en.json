@@ -1,7 +1,9 @@
 {
     "config": {
         "abort": {
-            "already_configured": "Device is already configured"
+            "already_configured": "Device is already configured",
+            "reauth_successful": "Re-authentication was successful",
+            "reconfigure_successful": "Re-configuration was successful"
         },
         "error": {
             "cannot_connect": "Failed to connect",
@@ -9,26 +11,30 @@
             "unknown": "Unexpected error"
         },
         "step": {
+            "reauth_confirm": {
+                "data": {
+                    "email": "Email",
+                    "password": "Password"
+                },
+                "description": "The Emporia Vue integration needs to re-authenticate your account",
+                "title": "Authentication expired for {name}"
+            },
+            "reconfigure": {
+                "data": {
+                    "enable_1d": "Energy Today Sensor",
+                    "enable_1m": "Power Minute Average Sensor",
+                    "enable_1mon": "Energy This Month Sensor",
+                    "solar_invert": "Invert Values for Solar Circuits"
+                }
+            },
             "user": {
                 "data": {
                     "email": "Email",
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "password": "Password"
-                }
-            }
-        }
-    },
-    "options": {
-        "step": {
-            "init": {
-                "data": {
-                    "email": "Email",
-                    "enable_1d": "Energy Today Sensor",
-                    "enable_1m": "Power Minute Average Sensor",
-                    "enable_1mon": "Energy This Month Sensor",
-                    "password": "Password"
+                    "password": "Password",
+                    "solar_invert": "Invert Values for Solar Circuits"
                 }
             }
         }

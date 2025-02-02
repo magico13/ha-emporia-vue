@@ -1,10 +1,13 @@
 """Platform for switch integration."""
 
 import asyncio
-import logging
 from datetime import timedelta
-from functools import cached_property
+import logging
 from typing import Any
+
+from pyemvue import PyEmVue
+from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
+from requests import exceptions
 
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -16,16 +19,13 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from pyemvue import PyEmVue
-from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
-from requests import exceptions
 
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-device_information: dict[int, VueDevice] = {}  # data is the populated device objects
+device_information: dict[str, VueDevice] = {}  # data is the populated device objects
 
 
 async def __async_update_data(vue: PyEmVue):
@@ -37,17 +37,17 @@ async def __async_update_data(vue: PyEmVue):
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
-        data = {}
+        data : dict[str, Any] = {}
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         outlets: list[OutletDevice]
         chargers: list[ChargerDevice]
         (outlets, chargers) = await loop.run_in_executor(None, vue.get_devices_status)
         if outlets:
             for outlet in outlets:
-                data[outlet.device_gid] = outlet
+                data[str(outlet.device_gid)] = outlet
         if chargers:
             for charger in chargers:
-                data[charger.device_gid] = charger
+                data[str(charger.device_gid)] = charger
         return data
     except Exception as err:
         raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
@@ -66,7 +66,7 @@ async def async_setup_entry(
     for device in devices:
         if device.outlet or device.ev_charger:
             await loop.run_in_executor(None, vue.populate_device_properties, device)
-            device_information[device.device_gid] = device
+            device_information[str(device.device_gid)] = device
 
     async def async_update_data():
         return await __async_update_data(
@@ -108,7 +108,7 @@ async def async_setup_entry(
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
     """Representation of an Emporia Smart Outlet state."""
 
-    def __init__(self, coordinator, vue, gid) -> None:
+    def __init__(self, coordinator: DataUpdateCoordinator[dict[str, Any]], vue: PyEmVue, gid: str) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._vue = vue
@@ -137,7 +137,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
         )
         await self.coordinator.async_request_refresh()
 
-    @cached_property
+    @property
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
         return DeviceInfo(
@@ -148,21 +148,23 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
             manufacturer="Emporia",
         )
 
-    @cached_property
+    @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
         return self.coordinator.data[self._device_gid].outlet_on
 
-    @cached_property
+    @property
     def unique_id(self) -> str:
         """Unique ID for the switch."""
         return f"switch.emporia_vue.{self._device_gid}"
 
     def turn_on(self, **kwargs: Any) -> None:
-        raise NotImplementedError()
+        """Turn the switch on."""
+        raise NotImplementedError
 
     def turn_off(self, **kwargs: Any) -> None:
-        raise NotImplementedError()
+        """Turn the switch off."""
+        raise NotImplementedError
 
 
 class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
@@ -176,10 +178,10 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
         """Turn the charger off."""
         await self._update_switch(False)
 
-    @cached_property
+    @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device.device_gid].charger_on
+        return self.coordinator.data[self._device_gid].charger_on
 
     async def _update_switch(self, on: bool) -> None:
         """Update the switch."""
@@ -188,7 +190,7 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
             await loop.run_in_executor(
                 None,
                 self._vue.update_charger,
-                self._coordinator.data[self._device.device_gid],
+                self.coordinator.data[self._device_gid],
                 on,
             )
         except exceptions.HTTPError as err:
@@ -198,10 +200,12 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
                 err.response.text,
             )
             raise
-        await self._coordinator.async_request_refresh()
+        await self.coordinator.async_request_refresh()
 
     def turn_on(self, **kwargs: Any) -> None:
-        raise NotImplementedError()
+        """Turn the charger on."""
+        raise NotImplementedError
 
     def turn_off(self, **kwargs: Any) -> None:
-        raise NotImplementedError()
+        """Turn the charger off."""
+        raise NotImplementedError

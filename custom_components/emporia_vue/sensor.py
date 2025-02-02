@@ -1,8 +1,10 @@
 """Platform for sensor integration."""
 
-import logging
 from datetime import datetime
-from functools import cached_property
+import logging
+
+from pyemvue.device import VueDevice, VueDeviceChannel
+from pyemvue.enums import Scale
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -15,8 +17,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from pyemvue.device import VueDevice, VueDeviceChannel
-from pyemvue.enums import Scale
 
 from .const import DOMAIN
 
@@ -100,7 +100,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             self._attr_suggested_display_precision = 1
             self._attr_name = f"Power {self.scale_readable()}"
 
-    @cached_property
+    @property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         device_name = self._channel.name or self._device.device_name
@@ -114,14 +114,14 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             manufacturer="Emporia",
         )
 
-    @cached_property
+    @property
     def last_reset(self) -> datetime | None:
-        """The time when the daily/monthly sensor was reset. Midnight local time."""
+        """Reset time of the daily/monthly sensor. Midnight local time."""
         if self._id in self.coordinator.data:
             return self.coordinator.data[self._id]["reset"]
         return None
 
-    @cached_property
+    @property
     def native_value(self) -> float | None:
         """Return the state of the sensor."""
         if self._id in self.coordinator.data:
@@ -129,9 +129,9 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             return self.scale_usage(usage) if usage is not None else None
         return None
 
-    @cached_property
+    @property
     def unique_id(self) -> str:
-        """Unique ID for the sensor."""
+        """Return the Unique ID for the sensor."""
         if self._scale == Scale.MINUTE.value:
             return (
                 "sensor.emporia_vue.instant."
