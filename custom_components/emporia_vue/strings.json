@@ -8,7 +8,7 @@
           "enable_1m": "Power Minute Average Sensor",
           "enable_1d": "Energy Today Sensor",
           "enable_1mon": "Energy This Month Sensor",
-          "merged_behavior": "Merged Circuit Operation"
+          "solar_invert": "Invert Values for Solar Circuits"
         }
       },
       "reconfigure": {
@@ -16,7 +16,7 @@
           "enable_1m": "[%key:component::emporia_vue::config::step::user::data::enable_1m%]",
           "enable_1d": "[%key:component::emporia_vue::config::step::user::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::user::data::enable_1mon%]",
-          "merged_behavior": "[%key:component::emporia_vue::config::step::user::data::merged_behavior%]"
+          "solar_invert": "[%key:component::emporia_vue::config::step::user::data::solar_invert%]"
         }
       },
       "reauth_confirm": {

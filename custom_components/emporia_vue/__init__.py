@@ -38,9 +38,7 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
-    MERGED_ABS,
-    MERGED_BEHAVIOR,
-    MERGED_INVERT,
+    SOLAR_INVERT,
     VUE_DATA,
 )
 
@@ -54,7 +52,8 @@ DEVICES_ONLINE: list[str] = []
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
-CONF_MERGED_BEHAVIOR: str = MERGED_INVERT
+INVERT_SOLAR: bool = True
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Emporia Vue component."""
@@ -63,9 +62,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if not conf:
         return True
 
-    global CONF_MERGED_BEHAVIOR
-    if MERGED_BEHAVIOR in conf:
-        CONF_MERGED_BEHAVIOR = conf[MERGED_BEHAVIOR]
+    global INVERT_SOLAR
+    if SOLAR_INVERT in conf:
+        INVERT_SOLAR = conf[SOLAR_INVERT]
 
     hass.async_create_task(
         hass.config_entries.flow.async_init(
@@ -77,7 +76,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
-                MERGED_BEHAVIOR: conf[MERGED_BEHAVIOR],
+                INVERT_SOLAR: conf[SOLAR_INVERT],
                 CUSTOMER_GID: conf[CUSTOMER_GID],
                 CONFIG_TITLE: conf[CONFIG_TITLE],
             },
@@ -491,8 +490,10 @@ async def parse_flattened_usage_data(
                 )
 
             bidirectional = "bidirectional" in info_channel.type.lower()
-            merged = "merged" in info_channel.type.lower()
-            fixed_usage = fix_usage_sign(channel_num, fixed_usage, bidirectional, merged, CONF_MERGED_BEHAVIOR)
+            is_solar = info_channel.channel_type_gid == 13
+            fixed_usage = fix_usage_sign(
+                channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
+            )
 
             data[identifier] = {
                 "device_gid": gid,
@@ -572,19 +573,23 @@ def make_channel_id(channel: VueDeviceChannel, scale: str) -> str:
     return f"{channel.device_gid}-{channel.channel_num}-{scale}"
 
 
-def fix_usage_sign(channel_num: str, usage: float, bidirectional: bool, merged:bool, merged_behavior: str) -> float:
+def fix_usage_sign(
+    channel_num: str,
+    usage: float,
+    bidirectional: bool,
+    is_solar: bool,
+    invert_solar: str,
+) -> float:
     """If the channel is not '1,2,3' or 'Balance' we need it to be positive.
 
-    Merged circuits are a special case, as they can be inverted, abs'd, or left alone to support different solar setups.
+    Solar circuits are up to the user to decide. Positive is recommended for the energy dashboard.
 
     (see https://github.com/magico13/ha-emporia-vue/issues/57)
     """
-    if merged:
-        # for merged channels, we need to either invert or abs the value as requested
-        if merged_behavior == MERGED_ABS:
-            return abs(usage)
-        if merged_behavior == MERGED_INVERT:
-            return -usage
+    if is_solar:
+        # Energy dashboard wants solar to be positive, Emporia usually provides negative
+        if usage and invert_solar:
+            return -1 * usage
         return usage
 
     if usage and not bidirectional and channel_num not in ["1,2,3", "Balance"]:

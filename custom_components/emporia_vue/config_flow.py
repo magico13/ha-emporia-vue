@@ -11,7 +11,6 @@ import voluptuous as vol
 from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.selector import selector
 
 from .const import (
     CONFIG_TITLE,
@@ -20,10 +19,7 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
-    MERGED_ABS,
-    MERGED_BEHAVIOR,
-    MERGED_INVERT,
-    MERGED_NONE,
+    SOLAR_INVERT,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -66,8 +62,8 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
 
     new_data = dict(data)
 
-    if MERGED_BEHAVIOR not in new_data:
-        new_data[MERGED_BEHAVIOR] = MERGED_INVERT
+    if SOLAR_INVERT not in new_data:
+        new_data[SOLAR_INVERT] = True
 
     # Return info that you want to store in the config entry.
     return {
@@ -76,7 +72,7 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
         ENABLE_1M: new_data[ENABLE_1M],
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
-        MERGED_BEHAVIOR: new_data[MERGED_BEHAVIOR],
+        SOLAR_INVERT: new_data[SOLAR_INVERT],
         CONF_EMAIL: new_data[CONF_EMAIL],
         CONF_PASSWORD: new_data[CONF_PASSWORD],
     }
@@ -115,27 +111,29 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(ENABLE_1M, default=True): cv.boolean,
             vol.Optional(ENABLE_1D, default=True): cv.boolean,
             vol.Optional(ENABLE_1MON, default=True): cv.boolean,
+            vol.Optional(SOLAR_INVERT, default=True): cv.boolean,
         }
-
-        config_schema[vol.Required(MERGED_BEHAVIOR)] = selector({
-            "select": {
-                "options": [MERGED_INVERT, MERGED_ABS, MERGED_NONE],
-            }
-        })
 
         return self.async_show_form(
             step_id="user", data_schema=vol.Schema(config_schema), errors=errors
         )
 
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         """Handle the reconfiguration step."""
         current_config = self._get_reconfigure_entry()
         if user_input is not None:
-            _LOGGER.warning("User input on reconfigure was the following: %s", user_input)
+            _LOGGER.warning(
+                "User input on reconfigure was the following: %s", user_input
+            )
             _LOGGER.warning("Current config is: %s", current_config.data)
             info = current_config.data
             # if gid is not in current config, reauth and get gid again
-            if CUSTOMER_GID not in current_config.data or not current_config.data[CUSTOMER_GID]:
+            if (
+                CUSTOMER_GID not in current_config.data
+                or not current_config.data[CUSTOMER_GID]
+            ):
                 info = await validate_input(current_config.data)
 
             await self.async_set_unique_id(info[CUSTOMER_GID])
@@ -144,7 +142,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ENABLE_1M: user_input[ENABLE_1M],
                 ENABLE_1D: user_input[ENABLE_1D],
                 ENABLE_1MON: user_input[ENABLE_1MON],
-                MERGED_BEHAVIOR: user_input[MERGED_BEHAVIOR],
+                SOLAR_INVERT: user_input[SOLAR_INVERT],
                 CUSTOMER_GID: info[CUSTOMER_GID],
                 CONFIG_TITLE: info[CONFIG_TITLE],
             }
@@ -153,7 +151,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data_updates=data,
             )
 
-        data_schema : dict[vol.Optional | vol.Required, Any] = {
+        data_schema: dict[vol.Optional | vol.Required, Any] = {
             vol.Optional(
                 ENABLE_1M,
                 default=current_config.data.get(ENABLE_1M, True),
@@ -166,13 +164,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ENABLE_1MON,
                 default=current_config.data.get(ENABLE_1MON, True),
             ): cv.boolean,
+            vol.Optional(
+                SOLAR_INVERT,
+                default=current_config.data.get(SOLAR_INVERT, True),
+            ): cv.boolean,
         }
-
-        data_schema[vol.Required(MERGED_BEHAVIOR)] = selector({
-            "select": {
-                "options": [MERGED_INVERT, MERGED_ABS, MERGED_NONE],
-            }
-        })
 
         return self.async_show_form(
             step_id="reconfigure",
@@ -195,9 +191,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             gid = 0
             try:
                 hub = VueHub()
-                if not await hub.authenticate(
-                    user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
-                ) or not hub.vue.customer:
+                if (
+                    not await hub.authenticate(
+                        user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                    )
+                    or not hub.vue.customer
+                ):
                     raise InvalidAuth
                 gid = hub.vue.customer.customer_gid
             except InvalidAuth:
@@ -216,15 +215,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]): cv.string,
+                    vol.Required(
+                        CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]
+                    ): cv.string,
                     vol.Required(CONF_PASSWORD): cv.string,
                 }
             ),
             errors=errors,
         )
 
+
 class CannotConnect(exceptions.HomeAssistantError):
     """Error to indicate we cannot connect."""
+
 
 class InvalidAuth(exceptions.HomeAssistantError):
     """Error to indicate there is invalid auth."""

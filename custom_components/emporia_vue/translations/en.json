@@ -24,7 +24,7 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "merged_behavior": "Merged Circuit Operation"
+                    "solar_invert": "Invert Values for Solar Circuits"
                 }
             },
             "user": {
@@ -33,8 +33,8 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "merged_behavior": "Merged Circuit Operation",
-                    "password": "Password"
+                    "password": "Password",
+                    "solar_invert": "Invert Values for Solar Circuits"
                 }
             }
         }
