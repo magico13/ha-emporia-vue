@@ -18,6 +18,7 @@ from pyemvue.device import (
 )
 from pyemvue.enums import Scale
 import requests
+import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -32,6 +33,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONFIG_FLOW_SCHEMA,
     CONFIG_TITLE,
     CUSTOMER_GID,
     DOMAIN,
@@ -45,6 +47,11 @@ from .const import (
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 PLATFORMS: list[str] = ["sensor", "switch"]
+
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: CONFIG_FLOW_SCHEMA},
+    extra=vol.ALLOW_EXTRA,
+)
 
 DEVICE_GIDS: list[str] = []
 DEVICE_INFORMATION: dict[int, VueDevice] = {}

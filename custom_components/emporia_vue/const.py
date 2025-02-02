@@ -15,7 +15,7 @@ SOLAR_INVERT = "solar_invert"
 CUSTOMER_GID = "customer_gid"
 CONFIG_TITLE = "title"
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_FLOW_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,

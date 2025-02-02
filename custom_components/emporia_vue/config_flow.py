@@ -13,8 +13,8 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
+    CONFIG_FLOW_SCHEMA,
     CONFIG_TITLE,
-    CONFIG_SCHEMA,
     CUSTOMER_GID,
     DOMAIN,
     ENABLE_1D,
@@ -107,7 +107,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user", data_schema=CONFIG_SCHEMA, errors=errors
+            step_id="user", data_schema=CONFIG_FLOW_SCHEMA, errors=errors
         )
 
     async def async_step_reconfigure(
