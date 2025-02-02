@@ -3,11 +3,11 @@
   "name": "Emporia Vue",
   "codeowners": ["@magico13"],
   "config_flow": true,
-  "single_config_entry": true,
   "documentation": "https://github.com/magico13/ha-emporia-vue",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/magico13/ha-emporia-vue/issues",
   "requirements": ["pyemvue==0.18.7"],
+  "single_config_entry": true,
   "version": "0.10.3"
 }

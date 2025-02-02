@@ -14,6 +14,7 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONFIG_TITLE,
+    CONFIG_SCHEMA,
     CUSTOMER_GID,
     DOMAIN,
     ENABLE_1D,
@@ -105,17 +106,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
-        config_schema = {
-            vol.Required(CONF_EMAIL): cv.string,
-            vol.Required(CONF_PASSWORD): cv.string,
-            vol.Optional(ENABLE_1M, default=True): cv.boolean,
-            vol.Optional(ENABLE_1D, default=True): cv.boolean,
-            vol.Optional(ENABLE_1MON, default=True): cv.boolean,
-            vol.Optional(SOLAR_INVERT, default=True): cv.boolean,
-        }
-
         return self.async_show_form(
-            step_id="user", data_schema=vol.Schema(config_schema), errors=errors
+            step_id="user", data_schema=CONFIG_SCHEMA, errors=errors
         )
 
     async def async_step_reconfigure(
