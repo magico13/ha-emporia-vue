@@ -93,7 +93,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     DEVICE_INFORMATION = {}
 
     entry_data = entry.data
-    _LOGGER.warning("Setting up Emporia Vue with entry data: %s", entry_data)
+    _LOGGER.debug("Setting up Emporia Vue with entry data: %s", entry_data)
     email: str = entry_data[CONF_EMAIL]
     password: str = entry_data[CONF_PASSWORD]
     vue = PyEmVue()
@@ -199,7 +199,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 update_interval=timedelta(minutes=1),
             )
             await coordinator_1min.async_config_entry_first_refresh()
-            _LOGGER.info("1min Update data: %s", coordinator_1min.data)
+            _LOGGER.debug("1min Update data: %s", coordinator_1min.data)
         coordinator_1mon = None
         if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
             coordinator_1mon = DataUpdateCoordinator(
@@ -212,7 +212,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 update_interval=timedelta(hours=1),
             )
             await coordinator_1mon.async_config_entry_first_refresh()
-            _LOGGER.info("1mon Update data: %s", coordinator_1mon.data)
+            _LOGGER.debug("1mon Update data: %s", coordinator_1mon.data)
 
         coordinator_day_sensor = None
         if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
