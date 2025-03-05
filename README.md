@@ -21,7 +21,9 @@ Setting up a custom repository is done by:
 3. Click the 3-dot menu in the top right and select `Custom repositories`
 4. In the UI that opens, copy and paste the [url for this github repo](https://github.com/magico13/ha-emporia-vue) into the `Add custom repository URL` field.
 5. Set the category to `Integration`.
-6. Click the `Add` button. Further configuration is done within the Integrations configuration in Home Assistant. You may need to restart home assistant and clear your browser cache before it appears, try ctrl+shift+r if you don't see it in the configuration list.
+6. Click the `Add` button.
+7. Select Emporia Vue from the list and press the download button. 
+8. Further configuration is done within the Integrations configuration in Home Assistant. You may need to restart home assistant and clear your browser cache before it appears, try ctrl+shift+r if you don't see it in the configuration list.
 
 ![hacs1](images/hacs1.PNG)
 ![hacs2](images/hacs2.PNG)
