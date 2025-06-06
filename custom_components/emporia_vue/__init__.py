@@ -585,7 +585,7 @@ def fix_usage_sign(
     usage: float,
     bidirectional: bool,
     is_solar: bool,
-    invert_solar: str,
+    invert_solar: bool,
 ) -> float:
     """If the channel is not '1,2,3' or 'Balance' we need it to be positive.
 
