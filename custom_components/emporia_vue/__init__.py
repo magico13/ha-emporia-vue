@@ -69,10 +69,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if not conf:
         return True
 
-    global INVERT_SOLAR
-    if SOLAR_INVERT in conf:
-        INVERT_SOLAR = conf[SOLAR_INVERT]
-
     hass.async_create_task(
         hass.config_entries.flow.async_init(
             DOMAIN,
@@ -96,6 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
     global DEVICE_GIDS
     global DEVICE_INFORMATION
+    global INVERT_SOLAR
     DEVICE_GIDS = []
     DEVICE_INFORMATION = {}
 
@@ -103,6 +100,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Setting up Emporia Vue with entry data: %s", entry_data)
     email: str = entry_data[CONF_EMAIL]
     password: str = entry_data[CONF_PASSWORD]
+    if SOLAR_INVERT in entry_data:
+        INVERT_SOLAR = entry_data[SOLAR_INVERT]
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
