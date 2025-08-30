@@ -1,0 +1,5 @@
+homeassistant
+pytest
+pylint
+black
+isort
