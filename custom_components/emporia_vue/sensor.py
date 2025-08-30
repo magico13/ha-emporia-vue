@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from .leg_energy_sensor import LegEnergySensor
 
 from .const import DOMAIN
 
@@ -43,6 +44,40 @@ async def async_setup_entry(
             CurrentVuePowerSensor(coordinator_1min, identifier)
             for _, identifier in enumerate(coordinator_1min.data)
         )
+
+        # Add per-leg sensors (power and energy)
+        for device_id, device in coordinator_1min.data.items():
+            legs = device.get("legs", {})
+            if not legs:
+                continue
+
+            device_info = {
+                "identifiers": {(DOMAIN, device_id)},
+                "name": device.get("device_name", f"Emporia {device_id}"),
+                "manufacturer": "Emporia",
+                "model": "Vue",
+            }
+
+            for leg_key in legs.keys():
+                # Power sensor
+                async_add_entities([
+                    CurrentVuePowerSensor(
+                        coordinator_1min,
+                        f"{device_id}-leg-{leg_key}",
+                    )
+                ])
+
+                # Energy sensor
+                async_add_entities([
+                    LegEnergySensor(
+                        coordinator_1min,
+                        device_id=device_id,
+                        leg_key=leg_key,
+                        name=f"{device.get('device_name', device_id)} {leg_key.upper()} Energy",
+                        unique_id=f"{device_id}_{leg_key}_energy",
+                        device_info=device_info,
+                    )
+                ])
 
     if coordinator_1mon:
         async_add_entities(
