@@ -10,6 +10,8 @@
   "customizations": {
     "vscode": {
       "extensions": [
+        "github.copilot",
+        "github.copilot-chat",
         "ms-python.python",
         "ms-python.vscode-pylance",
         "ms-python.black-formatter",
