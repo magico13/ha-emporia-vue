@@ -40,6 +40,7 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
+    INTEGRATE_MINUTE,
     SOLAR_INVERT,
     VUE_DATA,
 )
@@ -60,6 +61,7 @@ LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
 INVERT_SOLAR: bool = True
+INTEGRATE_MINUTE_INTO_DAY: bool = True
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -80,6 +82,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
                 INVERT_SOLAR: conf[SOLAR_INVERT],
+                INTEGRATE_MINUTE_INTO_DAY: conf[INTEGRATE_MINUTE],
                 CUSTOMER_GID: conf[CUSTOMER_GID],
                 CONFIG_TITLE: conf[CONFIG_TITLE],
             },
@@ -102,6 +105,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     password: str = entry_data[CONF_PASSWORD]
     if SOLAR_INVERT in entry_data:
         INVERT_SOLAR = entry_data[SOLAR_INVERT]
+    if INTEGRATE_MINUTE in entry_data:
+        global INTEGRATE_MINUTE_INTO_DAY
+        INTEGRATE_MINUTE_INTO_DAY = entry_data[INTEGRATE_MINUTE]
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
@@ -169,28 +175,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.info("Updating day sensors")
                 LAST_DAY_UPDATE = now
                 LAST_DAY_DATA = await update_sensors(vue, [Scale.DAY.value])
-            else:
+            elif LAST_MINUTE_DATA and INTEGRATE_MINUTE_INTO_DAY:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
-                if LAST_MINUTE_DATA:
-                    for identifier, data in LAST_MINUTE_DATA.items():
-                        device_gid, channel_gid, _ = identifier.split("-")
-                        day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
-                        if (
-                            data
-                            and LAST_DAY_DATA
-                            and day_id in LAST_DAY_DATA
-                            and LAST_DAY_DATA[day_id]
-                            and "usage" in LAST_DAY_DATA[day_id]
-                            and LAST_DAY_DATA[day_id]["usage"] is not None
-                        ):
-                            # if we just passed midnight, then reset back to zero
-                            timestamp: datetime = data["timestamp"]
-                            await check_for_midnight(timestamp, int(device_gid), day_id)
+                for identifier, data in LAST_MINUTE_DATA.items():
+                    device_gid, channel_gid, _ = identifier.split("-")
+                    day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
+                    if (
+                        data
+                        and LAST_DAY_DATA
+                        and day_id in LAST_DAY_DATA
+                        and LAST_DAY_DATA[day_id]
+                        and "usage" in LAST_DAY_DATA[day_id]
+                        and LAST_DAY_DATA[day_id]["usage"] is not None
+                    ):
+                        # if we just passed midnight, then reset back to zero
+                        timestamp: datetime = data["timestamp"]
+                        await check_for_midnight(timestamp, int(device_gid), day_id)
 
-                            LAST_DAY_DATA[day_id]["usage"] += data[
-                                "usage"
-                            ]  # already in kwh
+                        LAST_DAY_DATA[day_id]["usage"] += data[
+                            "usage"
+                        ]  # already in kwh
             return LAST_DAY_DATA
 
         coordinator_1min = None
@@ -198,6 +203,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="sensor",
                 update_method=async_update_data_1min,
@@ -211,6 +217,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="sensor",
                 update_method=async_update_data_1mon,
@@ -225,6 +232,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_day_sensor = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="sensor",
                 update_method=async_update_day_sensors,

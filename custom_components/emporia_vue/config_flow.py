@@ -20,6 +20,7 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
+    INTEGRATE_MINUTE,
     SOLAR_INVERT,
 )
 
@@ -74,6 +75,7 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
         SOLAR_INVERT: new_data[SOLAR_INVERT],
+        INTEGRATE_MINUTE: new_data.get(INTEGRATE_MINUTE, True),
         CONF_EMAIL: new_data[CONF_EMAIL],
         CONF_PASSWORD: new_data[CONF_PASSWORD],
     }
@@ -133,6 +135,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ENABLE_1D: user_input[ENABLE_1D],
                 ENABLE_1MON: user_input[ENABLE_1MON],
                 SOLAR_INVERT: user_input[SOLAR_INVERT],
+                INTEGRATE_MINUTE: user_input.get(INTEGRATE_MINUTE, True),
                 CUSTOMER_GID: info[CUSTOMER_GID],
                 CONFIG_TITLE: info[CONFIG_TITLE],
             }
@@ -157,6 +160,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(
                 SOLAR_INVERT,
                 default=current_config.data.get(SOLAR_INVERT, True),
+            ): cv.boolean,
+            vol.Optional(
+                INTEGRATE_MINUTE,
+                default=current_config.data.get(INTEGRATE_MINUTE, True),
             ): cv.boolean,
         }
 
