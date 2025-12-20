@@ -6,17 +6,23 @@
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
           "enable_1m": "Power Minute Average Sensor",
+          "enable_1m_voltage": "Voltage Minute Average Sensor",
+          "enable_1m_amps": "Current Minute Average Sensor",
           "enable_1d": "Energy Today Sensor",
           "enable_1mon": "Energy This Month Sensor",
-          "solar_invert": "Invert Values for Solar Circuits"
+          "solar_invert": "Invert Values for Solar Circuits",
+          "integrate_minute_data": "Integrate Minute Data for Energy Sensors"
         }
       },
       "reconfigure": {
         "data": {
           "enable_1m": "[%key:component::emporia_vue::config::step::user::data::enable_1m%]",
+          "enable_1m_voltage": "[%key:component::emporia_vue::config::step::user::data::enable_1m_voltage%]",
+          "enable_1m_amps": "[%key:component::emporia_vue::config::step::user::data::enable_1m_amps%]",
           "enable_1d": "[%key:component::emporia_vue::config::step::user::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::user::data::enable_1mon%]",
-          "solar_invert": "[%key:component::emporia_vue::config::step::user::data::solar_invert%]"
+          "solar_invert": "[%key:component::emporia_vue::config::step::user::data::solar_invert%]",
+          "integrate_minute_data": "[%key:component::emporia_vue::config::step::user::data::integrate_minute_data%]"
         }
       },
       "reauth_confirm": {

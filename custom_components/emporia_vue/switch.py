@@ -37,7 +37,7 @@ async def __async_update_data(vue: PyEmVue):
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
-        data : dict[str, Any] = {}
+        data: dict[str, Any] = {}
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         outlets: list[OutletDevice]
         chargers: list[ChargerDevice]
@@ -76,6 +76,7 @@ async def async_setup_entry(
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
+        config_entry=config_entry,
         # Name of the data. For logging purposes.
         name="switch",
         update_method=async_update_data,
@@ -108,7 +109,9 @@ async def async_setup_entry(
 class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
     """Representation of an Emporia Smart Outlet state."""
 
-    def __init__(self, coordinator: DataUpdateCoordinator[dict[str, Any]], vue: PyEmVue, gid: str) -> None:
+    def __init__(
+        self, coordinator: DataUpdateCoordinator[dict[str, Any]], vue: PyEmVue, gid: str
+    ) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._vue = vue

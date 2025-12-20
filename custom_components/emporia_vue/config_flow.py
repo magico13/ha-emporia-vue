@@ -19,6 +19,8 @@ from .const import (
     DOMAIN,
     ENABLE_1D,
     ENABLE_1M,
+    ENABLE_1M_VOLTAGE,
+    ENABLE_1M_AMPS,
     ENABLE_1MON,
     INTEGRATE_MINUTE,
     SOLAR_INVERT,
@@ -72,6 +74,8 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
         CONFIG_TITLE: f"{hub.vue.customer.email} ({hub.vue.customer.customer_gid})",
         CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
         ENABLE_1M: new_data[ENABLE_1M],
+        ENABLE_1M_VOLTAGE: new_data.get(ENABLE_1M_VOLTAGE, False),
+        ENABLE_1M_AMPS: new_data.get(ENABLE_1M_AMPS, False),
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
         SOLAR_INVERT: new_data[SOLAR_INVERT],
@@ -132,6 +136,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_mismatch(reason="wrong_account")
             data = {
                 ENABLE_1M: user_input[ENABLE_1M],
+                ENABLE_1M_VOLTAGE: user_input.get(ENABLE_1M_VOLTAGE, False),
+                ENABLE_1M_AMPS: user_input.get(ENABLE_1M_AMPS, False),
                 ENABLE_1D: user_input[ENABLE_1D],
                 ENABLE_1MON: user_input[ENABLE_1MON],
                 SOLAR_INVERT: user_input[SOLAR_INVERT],
@@ -148,6 +154,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(
                 ENABLE_1M,
                 default=current_config.data.get(ENABLE_1M, True),
+            ): cv.boolean,
+            vol.Optional(
+                ENABLE_1M_VOLTAGE,
+                default=current_config.data.get(ENABLE_1M_VOLTAGE, False),
+            ): cv.boolean,
+            vol.Optional(
+                ENABLE_1M_AMPS,
+                default=current_config.data.get(ENABLE_1M_AMPS, False),
             ): cv.boolean,
             vol.Optional(
                 ENABLE_1D,

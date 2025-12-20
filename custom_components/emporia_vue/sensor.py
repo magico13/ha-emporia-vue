@@ -12,7 +12,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower
+from homeassistant.const import (
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -39,10 +44,17 @@ async def async_setup_entry(
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
     if coordinator_1min:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, identifier)
-            for _, identifier in enumerate(coordinator_1min.data)
-        )
+        entities: list[SensorEntity] = []
+        for identifier, item in coordinator_1min.data.items():
+            kind = item.get("kind")
+            if kind == "volt":
+                entities.append(VueVoltageSensor(coordinator_1min, identifier))
+            elif kind == "amp":
+                entities.append(VueCurrentSensor(coordinator_1min, identifier))
+            else:
+                entities.append(CurrentVuePowerSensor(coordinator_1min, identifier))
+        if entities:
+            async_add_entities(entities)
 
     if coordinator_1mon:
         async_add_entities(
@@ -171,3 +183,94 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         if self._scale == Scale.MONTH.value:
             return "This Month"
         return self._scale
+
+
+class _BaseVueChannelSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+    """Base class for Vue channel sensors (voltage/current)."""
+
+    def __init__(self, coordinator, identifier) -> None:
+        super().__init__(coordinator)
+        self._id = identifier
+        self._scale: str = coordinator.data[identifier]["scale"]
+        device_gid: int = coordinator.data[identifier]["device_gid"]
+        channel_num: str = coordinator.data[identifier]["channel_num"]
+        self._device: VueDevice = coordinator.data[identifier]["info"]
+        final_channel: VueDeviceChannel | None = None
+        if self._device is not None:
+            for channel in self._device.channels:
+                if channel.channel_num == channel_num:
+                    final_channel = channel
+                    break
+        if final_channel is None:
+            _LOGGER.warning(
+                "No channel found for device_gid %s and channel_num %s",
+                device_gid,
+                channel_num,
+            )
+            raise RuntimeError(
+                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
+            )
+        self._channel: VueDeviceChannel = final_channel
+        self._attr_has_entity_name = True
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        device_name = self._channel.name or self._device.device_name
+        return DeviceInfo(
+            identifiers={
+                (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
+            },
+            name=device_name,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+        )
+
+    @property
+    def last_reset(self) -> datetime | None:
+        # Voltage/current are instantaneous metrics; no reset
+        return None
+
+    @property
+    def native_value(self) -> float | None:
+        if self._id in self.coordinator.data:
+            return self.coordinator.data[self._id]["usage"]
+        return None
+
+
+class VueVoltageSensor(_BaseVueChannelSensor):  # type: ignore
+    """Voltage sensor at 1-minute level for VUE devices."""
+
+    def __init__(self, coordinator, identifier) -> None:
+        super().__init__(coordinator, identifier)
+        self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+        self._attr_device_class = SensorDeviceClass.VOLTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 1
+        self._attr_name = "Voltage Minute Average"
+
+    @property
+    def unique_id(self) -> str:
+        return (
+            "sensor.emporia_vue.instant_voltage."
+            f"{self._channel.device_gid}-{self._channel.channel_num}"
+        )
+
+
+class VueCurrentSensor(_BaseVueChannelSensor):  # type: ignore
+    """Current (amperage) sensor at 1-minute level for VUE devices."""
+
+    def __init__(self, coordinator, identifier) -> None:
+        super().__init__(coordinator, identifier)
+        self._attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+        self._attr_device_class = SensorDeviceClass.CURRENT
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 2
+        self._attr_name = "Current Minute Average"
+
+    @property
+    def unique_id(self) -> str:
+        return (
+            "sensor.emporia_vue.instant_current."
+            f"{self._channel.device_gid}-{self._channel.channel_num}"
+        )

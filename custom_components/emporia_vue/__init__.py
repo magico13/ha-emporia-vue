@@ -16,7 +16,7 @@ from pyemvue.device import (
     VueDeviceChannelUsage,
     VueUsageDevice,
 )
-from pyemvue.enums import Scale
+from pyemvue.enums import Scale, Unit
 import requests
 import voluptuous as vol
 
@@ -39,6 +39,8 @@ from .const import (
     DOMAIN,
     ENABLE_1D,
     ENABLE_1M,
+    ENABLE_1M_AMPS,
+    ENABLE_1M_VOLTAGE,
     ENABLE_1MON,
     INTEGRATE_MINUTE,
     SOLAR_INVERT,
@@ -62,6 +64,8 @@ LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
 INVERT_SOLAR: bool = True
 INTEGRATE_MINUTE_INTO_DAY: bool = True
+ENABLE_VOLTAGE_MINUTE: bool = False
+ENABLE_AMPS_MINUTE: bool = False
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -96,6 +100,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
+    global INTEGRATE_MINUTE_INTO_DAY
+    global ENABLE_VOLTAGE_MINUTE
+    global ENABLE_AMPS_MINUTE
     DEVICE_GIDS = []
     DEVICE_INFORMATION = {}
 
@@ -103,11 +110,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Setting up Emporia Vue with entry data: %s", entry_data)
     email: str = entry_data[CONF_EMAIL]
     password: str = entry_data[CONF_PASSWORD]
-    if SOLAR_INVERT in entry_data:
-        INVERT_SOLAR = entry_data[SOLAR_INVERT]
-    if INTEGRATE_MINUTE in entry_data:
-        global INTEGRATE_MINUTE_INTO_DAY
-        INTEGRATE_MINUTE_INTO_DAY = entry_data[INTEGRATE_MINUTE]
+
+    INVERT_SOLAR = entry_data.get(SOLAR_INVERT, True)
+    INTEGRATE_MINUTE_INTO_DAY = entry_data.get(INTEGRATE_MINUTE, True)
+    # Optional minute-level voltage/current sensors
+    ENABLE_VOLTAGE_MINUTE = entry_data.get(ENABLE_1M_VOLTAGE, False)
+    ENABLE_AMPS_MINUTE = entry_data.get(ENABLE_1M_AMPS, False)
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
@@ -151,7 +159,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            data: dict = await update_sensors(vue, [Scale.MINUTE.value])
+            data: dict = await update_sensors(vue, [Scale.MINUTE.value], Unit.KWH.value)
+            # Optionally include voltage/current for VUE devices via separate unit calls
+            if ENABLE_VOLTAGE_MINUTE:
+                try:
+                    volt_data: dict = await update_sensors(
+                        vue, [Scale.MINUTE.value], Unit.VOLTS.value
+                    )
+                    if volt_data:
+                        data.update(volt_data)
+                except UpdateFailed:
+                    _LOGGER.debug("Voltage update failed; continuing without voltage")
+            if ENABLE_AMPS_MINUTE:
+                try:
+                    amp_data: dict = await update_sensors(
+                        vue, [Scale.MINUTE.value], Unit.AMPHOURS.value
+                    )
+                    if amp_data:
+                        data.update(amp_data)
+                except UpdateFailed:
+                    _LOGGER.debug("Current update failed; continuing without current")
             # store this, then have the daily sensors pull from it and integrate
             # then the daily can "true up" hourly (or more frequent) in case it's incorrect
             if data:
@@ -165,7 +192,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            return await update_sensors(vue, [Scale.MONTH.value])
+            return await update_sensors(vue, [Scale.MONTH.value], Unit.KWH.value)
 
         async def async_update_day_sensors() -> dict:
             global LAST_DAY_UPDATE
@@ -174,13 +201,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
                 LAST_DAY_UPDATE = now
-                LAST_DAY_DATA = await update_sensors(vue, [Scale.DAY.value])
+                LAST_DAY_DATA = await update_sensors(
+                    vue, [Scale.DAY.value], Unit.KWH.value
+                )
             elif LAST_MINUTE_DATA and INTEGRATE_MINUTE_INTO_DAY:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
                 for identifier, data in LAST_MINUTE_DATA.items():
-                    device_gid, channel_gid, _ = identifier.split("-")
-                    day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
+                    # Only integrate KWh minute data
+                    if not data or data.get("kind") != "usage":
+                        continue
+                    parts = identifier.split("-")
+                    if len(parts) < 2:
+                        continue
+                    device_gid, channel_gid = parts[0], parts[1]
+                    day_id: str = (
+                        f"{device_gid}-{channel_gid}-{Scale.DAY.value}-{Unit.KWH.value}"
+                    )
                     if (
                         data
                         and LAST_DAY_DATA
@@ -385,7 +422,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
+async def update_sensors(vue: PyEmVue, scales: list[str], unit: str) -> dict:
     """Fetch data from API endpoint."""
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
@@ -399,22 +436,27 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
             )
             if not usage_dict:
                 _LOGGER.warning(
-                    "No channels found during update for scale %s. Retrying", scale
+                    "No channels found during update for scale %s and unit %s. Retrying",
+                    scale,
+                    unit,
                 )
                 usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale, unit
                 )
             if usage_dict:
-                flattened, data_time = flatten_usage_data(usage_dict, scale)
+                flattened, data_time = flatten_usage_data(usage_dict, scale, unit)
                 await parse_flattened_usage_data(
                     flattened,
                     scale,
                     data,
                     utcnow,
                     data_time,
+                    unit,
                 )
             else:
-                raise UpdateFailed(f"No channels found during update for scale {scale}")
+                raise UpdateFailed(
+                    f"No channels found during update for scale {scale} and unit {unit}"
+                )
 
         return data
     except Exception as err:
@@ -425,6 +467,7 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
 def flatten_usage_data(
     usage_devices: dict[int, VueUsageDevice],
     scale: str,
+    unit: str,
 ) -> tuple[dict[str, VueDeviceChannelUsage], datetime]:
     """Flattens the raw usage data into a dictionary of channel ids and usage info."""
     flattened: dict[str, VueDeviceChannelUsage] = {}
@@ -433,11 +476,11 @@ def flatten_usage_data(
         data_time = usage.timestamp or data_time
         if usage.channels:
             for channel in usage.channels.values():
-                identifier: str = make_channel_id(channel, scale)
+                identifier: str = make_channel_id(channel, scale, unit)
                 flattened[identifier] = channel
                 if channel.nested_devices:
                     nested_flattened, _ = flatten_usage_data(
-                        channel.nested_devices, scale
+                        channel.nested_devices, scale, unit
                     )
                     flattened.update(nested_flattened)
     return (flattened, data_time)
@@ -449,6 +492,7 @@ async def parse_flattened_usage_data(
     data: dict[str, Any],
     requested_time: datetime,
     data_time: datetime,
+    unit: str,
 ) -> None:
     """Loop through the device list and find the corresponding update data."""
     unused_data: dict[str, VueDeviceChannelUsage] = flattened_data.copy()
@@ -465,7 +509,7 @@ async def parse_flattened_usage_data(
                 data_time,
             )
         for info_channel in info.channels:
-            identifier: str = make_channel_id(info_channel, scale)
+            identifier: str = make_channel_id(info_channel, scale, unit)
             channel_num = info_channel.channel_num
             channel: VueDeviceChannelUsage | None = flattened_data.get(identifier)
             if not channel:
@@ -477,7 +521,7 @@ async def parse_flattened_usage_data(
             unused_data.pop(identifier, None)
             reset_datetime: datetime | None = None
 
-            if scale in [Scale.DAY.value, Scale.MONTH.value]:
+            if unit == Unit.KWH.value and scale in [Scale.DAY.value, Scale.MONTH.value]:
                 # We need to know when the value reset
                 # For day, that should be midnight local time, but we need to use the timestamp
                 # returnedto us for month, that should be midnight of the reset day they specify
@@ -503,20 +547,39 @@ async def parse_flattened_usage_data(
                     fixed_usage,
                 )
 
-            bidirectional = "bidirectional" in info_channel.type.lower()
-            is_solar = info_channel.channel_type_gid == 13
-            fixed_usage = fix_usage_sign(
-                channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
-            )
+            # Only adjust sign for energy (KWh)
+            if unit == Unit.KWH.value:
+                bidirectional = "bidirectional" in info_channel.type.lower()
+                is_solar = info_channel.channel_type_gid == 13
+                fixed_usage = fix_usage_sign(
+                    channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
+                )
+            # Determine kind and conversion for minute AmpHours
+            kind = "usage"
+            value = fixed_usage
+            if unit == Unit.VOLTS.value:
+                kind = "volt"
+            elif unit == Unit.AMPHOURS.value:
+                kind = "amp"
+                if scale == Scale.MINUTE.value and value is not None:
+                    value = 60 * value
+
+            # Filter voltage/current to VUE devices only
+            if kind in ("volt", "amp"):
+                model: str | None = getattr(info, "model", None)
+                if not (isinstance(model, str) and model.startswith("VUE")):
+                    continue
 
             data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
-                "usage": fixed_usage,
+                "usage": value,
                 "scale": scale,
+                "unit": unit,
                 "info": info,
                 "reset": reset_datetime,
                 "timestamp": local_time,
+                "kind": kind,
             }
     if unused_data:
         # unused_data is not json serializable because VueDeviceChannelUsage
@@ -534,7 +597,7 @@ async def parse_flattened_usage_data(
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
             await parse_flattened_usage_data(
-                flattened_data, scale, data, requested_time, data_time
+                flattened_data, scale, data, requested_time, data_time, unit
             )
 
 
@@ -582,9 +645,9 @@ async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
     return False
 
 
-def make_channel_id(channel: VueDeviceChannel, scale: str) -> str:
-    """Format the channel id for a channel and scale."""
-    return f"{channel.device_gid}-{channel.channel_num}-{scale}"
+def make_channel_id(channel: VueDeviceChannel, scale: str, unit: str) -> str:
+    """Format the channel id for a channel, scale, and unit."""
+    return f"{channel.device_gid}-{channel.channel_num}-{scale}-{unit}"
 
 
 def fix_usage_sign(
