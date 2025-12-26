@@ -44,5 +44,17 @@
                 }
             }
         }
+    },
+    "services": {
+        "set_charger_current": {
+            "description": "Sets the charging current for an EVSE/charger",
+            "fields": {
+                "current": {
+                    "description": "The desired charging current in amps",
+                    "name": "Charging current"
+                }
+            },
+            "name": "Set charger current"
+        }
     }
 }

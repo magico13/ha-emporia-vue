@@ -65,7 +65,6 @@ async def async_setup_entry(
     devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
     for device in devices:
         if device.outlet or device.ev_charger:
-            await loop.run_in_executor(None, vue.populate_device_properties, device)
             device_information[str(device.device_gid)] = device
 
     async def async_update_data():

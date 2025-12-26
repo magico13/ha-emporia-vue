@@ -44,5 +44,17 @@
       "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
     }
+  },
+  "services": {
+    "set_charger_current": {
+      "name": "Set charger current",
+      "description": "Sets the charging current for an EVSE/charger",
+      "fields": {
+        "current": {
+          "name": "Charging current",
+          "description": "The desired charging current in amps"
+        }
+      }
+    }
   }
 }
