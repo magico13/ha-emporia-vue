@@ -12,7 +12,12 @@ Data is pulled from the Emporia API using the [PyEmVue python module](https://gi
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://github.com/custom-components/hacs)
 
-The simplest way to install this integration is with the Home Assistant Community Store (HACS). This is not (yet) part of the default store and will need to be added as a custom repository.
+The simplest way to install this integration is with the Home Assistant Community Store (HACS). 
+
+Search the store for "Emporia Vue" or search for `magico13/ha-emporia-vue`.
+
+<details markdown=1>
+<summary>Click here to read legacy instructions for custom repository installation</summary>
 
 Setting up a custom repository is done by:
 
@@ -29,6 +34,8 @@ Setting up a custom repository is done by:
 ![hacs2](images/hacs2.PNG)
 ![hacs3](images/hacs3.PNG)
 ![hacs4](images/hacs4.PNG)
+
+</details>
 
 ## Manual Installation
 
