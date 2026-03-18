@@ -1,6 +1,7 @@
 """The Emporia Vue integration."""
 
 import asyncio
+import calendar
 from datetime import UTC, datetime, timedelta, tzinfo
 import logging
 import re
@@ -59,6 +60,8 @@ DEVICES_ONLINE: list[str] = []
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
+LAST_MONTH_DATA: dict[str, Any] = {}
+LAST_MONTH_UPDATE: datetime | None = None
 INVERT_SOLAR: bool = True
 
 
@@ -153,14 +156,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 LAST_MINUTE_DATA = data
             return data
 
-        async def async_update_data_1mon() -> dict:
-            """Fetch data from API endpoint at a 1 hour interval.
-
-            This is the place to pre-process the data to lookup tables
-            so entities can quickly look up their data.
-            """
-            return await update_sensors(vue, [Scale.MONTH.value])
-
         async def async_update_day_sensors() -> dict:
             global LAST_DAY_UPDATE
             global LAST_DAY_DATA
@@ -193,6 +188,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             ]  # already in kwh
             return LAST_DAY_DATA
 
+        async def async_update_month_sensors() -> dict:
+            global LAST_MONTH_UPDATE
+            global LAST_MONTH_DATA
+            now: datetime = datetime.now(UTC)
+            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
+                _LOGGER.info("Updating month sensors")
+                LAST_MONTH_UPDATE = now
+                LAST_MONTH_DATA = await update_sensors(vue, [Scale.MONTH.value])
+            else:
+                # integrate the minute data
+                _LOGGER.info("Integrating minute data into month sensors")
+                if LAST_MINUTE_DATA:
+                    for identifier, data in LAST_MINUTE_DATA.items():
+                        device_gid, channel_gid, _ = identifier.split("-")
+                        month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                        if (
+                            data
+                            and LAST_MONTH_DATA
+                            and month_id in LAST_MONTH_DATA
+                            and LAST_MONTH_DATA[month_id]
+                            and "usage" in LAST_MONTH_DATA[month_id]
+                            and LAST_MONTH_DATA[month_id]["usage"] is not None
+                        ):
+                            # if we just passed the billing cycle start, reset back to zero
+                            timestamp: datetime = data["timestamp"]
+                            await check_for_new_month(timestamp, int(device_gid), month_id)
+
+                            LAST_MONTH_DATA[month_id]["usage"] += data[
+                                "usage"
+                            ]  # already in kwh
+            return LAST_MONTH_DATA
+
         coordinator_1min = None
         if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
             coordinator_1min = DataUpdateCoordinator(
@@ -213,9 +240,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER,
                 # Name of the data. For logging purposes.
                 name="sensor",
-                update_method=async_update_data_1mon,
+                update_method=async_update_month_sensors,
                 # Polling interval. Will only be polled if there are subscribers.
-                update_interval=timedelta(hours=1),
+                update_interval=timedelta(minutes=1),
             )
             await coordinator_1mon.async_config_entry_first_refresh()
             _LOGGER.debug("1mon Update data: %s", coordinator_1mon.data)
@@ -642,6 +669,33 @@ async def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
             LAST_DAY_DATA[day_id]["reset"] = local_midnight
 
 
+async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: str):
+    """If a new billing cycle has started, reset the LAST_MONTH_DATA for Month sensors to zero."""
+    if device_gid in DEVICE_INFORMATION:
+        device_info: VueDevice = DEVICE_INFORMATION[device_gid]
+        local_time: datetime = await change_time_to_local(
+            timestamp, device_info.time_zone
+        )
+        current_reset: datetime = determine_reset_datetime(
+            local_time,
+            device_info.billing_cycle_start_day,
+            True,
+        )
+        last_reset = LAST_MONTH_DATA[month_id]["reset"]
+        if current_reset > last_reset:
+            # New billing cycle started
+            _LOGGER.info(
+                "New billing cycle started for id %s! Timestamp is %s, "
+                "current reset is %s, previous reset was %s",
+                month_id,
+                local_time,
+                current_reset,
+                last_reset,
+            )
+            LAST_MONTH_DATA[month_id]["usage"] = 0
+            LAST_MONTH_DATA[month_id]["reset"] = current_reset
+
+
 def determine_reset_datetime(
     local_time: datetime, monthly_cycle_start: int, is_month: bool
 ) -> datetime:
@@ -650,11 +704,27 @@ def determine_reset_datetime(
         hour=0, minute=0, second=0, microsecond=0
     )
     if is_month:
-        # Month should use the last billing_cycle_start_day of either this or last month
-        reset_datetime = reset_datetime.replace(day=monthly_cycle_start)
-        if reset_datetime.day < monthly_cycle_start:
-            # we're in the start of a month, use the reset_day for last month
-            reset_datetime -= dateutil.relativedelta.relativedelta(months=1)
+        # Month should use the most recent billing_cycle_start_day midnight.
+        # Never return a future reset datetime.
+        last_day_this_month = calendar.monthrange(
+            reset_datetime.year, reset_datetime.month
+        )[1]
+        target_day_this_month = min(monthly_cycle_start, last_day_this_month)
+        candidate_this_month = reset_datetime.replace(day=target_day_this_month)
+
+        if local_time >= candidate_this_month:
+            reset_datetime = candidate_this_month
+        else:
+            previous_month = reset_datetime - dateutil.relativedelta.relativedelta(
+                months=1
+            )
+            last_day_previous_month = calendar.monthrange(
+                previous_month.year, previous_month.month
+            )[1]
+            target_day_previous_month = min(
+                monthly_cycle_start, last_day_previous_month
+            )
+            reset_datetime = previous_month.replace(day=target_day_previous_month)
     return reset_datetime
 
 
