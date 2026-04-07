@@ -163,7 +163,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
                 LAST_DAY_UPDATE = now
-                LAST_DAY_DATA = await update_sensors(vue, [Scale.DAY.value])
+                updated_day_data = await update_sensors(vue, [Scale.DAY.value])
+                apply_api_update_debounce(updated_day_data, LAST_DAY_DATA, "day")
+                LAST_DAY_DATA = updated_day_data
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
@@ -195,7 +197,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
                 _LOGGER.info("Updating month sensors")
                 LAST_MONTH_UPDATE = now
-                LAST_MONTH_DATA = await update_sensors(vue, [Scale.MONTH.value])
+                updated_month_data = await update_sensors(vue, [Scale.MONTH.value])
+                apply_api_update_debounce(
+                    updated_month_data,
+                    LAST_MONTH_DATA,
+                    "month",
+                )
+                LAST_MONTH_DATA = updated_month_data
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into month sensors")
@@ -743,3 +751,70 @@ def handle_none_usage(scale: str, identifier: str):
     ):
         return LAST_DAY_DATA[identifier]["usage"]
     return 0
+
+
+def apply_api_update_debounce(
+    updated_data: dict[str, Any],
+    existing_data: dict[str, Any],
+    scale_name: str,
+) -> None:
+    """Prevent API reset lag from inflating totals shortly after local reset time.
+
+    During the debounce window after reset, API values may lag and still include prior
+    period usage. In that case, allow API values to lower totals but not raise them
+    above the minute-integrated value already tracked in memory.
+    """
+    if not updated_data or not existing_data:
+        return
+
+    for identifier, updated in updated_data.items():
+        if identifier not in existing_data or not updated:
+            continue
+
+        existing = existing_data[identifier]
+        if not existing:
+            continue
+
+        updated_usage = updated.get("usage")
+        existing_usage = existing.get("usage")
+        reset_datetime = updated.get("reset")
+        timestamp = updated.get("timestamp")
+
+        if (
+            updated_usage is None
+            or existing_usage is None
+            or reset_datetime is None
+            or timestamp is None
+        ):
+            continue
+
+        if is_in_reset_debounce_window(
+            timestamp,
+            reset_datetime,
+            scale_name,
+        ):
+            bounded_usage = min(updated_usage, existing_usage)
+            if bounded_usage != updated_usage:
+                _LOGGER.info(
+                    "Debouncing %s API reset lag for %s: keeping %.6f instead of %.6f",
+                    scale_name,
+                    identifier,
+                    bounded_usage,
+                    updated_usage,
+                )
+                updated["usage"] = bounded_usage
+
+
+def is_in_reset_debounce_window(
+    local_time: datetime,
+    reset_datetime: datetime,
+    scale_name: str,
+    debounce_minutes: int = 30,
+) -> bool:
+    """Return true when local_time is in the reset debounce window for the scale."""
+    if scale_name == "month" and local_time.date() != reset_datetime.date():
+        # Monthly debounce only applies on billing-cycle reset date rollover.
+        return False
+
+    elapsed = local_time - reset_datetime
+    return timedelta(0) <= elapsed < timedelta(minutes=debounce_minutes)
