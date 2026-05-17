@@ -42,8 +42,14 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 2. Select `Integrations`
 3. Click the `+` button at the bottom
 4. Search for "Emporia Vue" and add it. If you do not see it in the list, ensure that you have installed the integration.
-5. In the UI that opens, enter the email and password used for the Emporia App.
+5. In the UI that opens, choose the authentication method. For normal Emporia accounts, enter the email and password used for the Emporia App. For accounts created with Sign in with Google or another SSO provider, choose token authentication and enter the Emporia `id_token`, `access_token`, and `refresh_token`.
 6. Done! You should now have a sensor for each "channel".
+
+### Google/SSO Accounts
+
+Emporia accounts created with Sign in with Google do not have an Emporia password that can be used by this integration. For those accounts, the setup flow accepts the same Emporia tokens supported by PyEmVue: `id_token`, `access_token`, and `refresh_token`.
+
+The integration stores those tokens in the Home Assistant config entry and uses the refresh token when logging in after restarts or reauthentication.
 
 ### Sensor Naming
 

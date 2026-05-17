@@ -2,7 +2,9 @@
 
 import asyncio
 import calendar
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta, tzinfo
+from functools import partial
 import logging
 import re
 from typing import Any
@@ -34,9 +36,13 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    AUTH_METHOD,
+    AUTH_METHOD_EMAIL_PASSWORD,
+    AUTH_METHOD_TOKENS,
+    CONF_ACCESS_TOKEN,
+    CONF_ID_TOKEN,
+    CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
-    CONFIG_TITLE,
-    CUSTOMER_GID,
     DOMAIN,
     ENABLE_1D,
     ENABLE_1M,
@@ -48,6 +54,12 @@ from .const import (
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 PLATFORMS: list[str] = ["sensor", "switch"]
+SENSITIVE_CONFIG_KEYS = {
+    CONF_PASSWORD,
+    CONF_ID_TOKEN,
+    CONF_ACCESS_TOKEN,
+    CONF_REFRESH_TOKEN,
+}
 
 CONFIG_SCHEMA = vol.Schema(
     {DOMAIN: CONFIG_FLOW_SCHEMA},
@@ -63,6 +75,14 @@ LAST_DAY_UPDATE: datetime | None = None
 LAST_MONTH_DATA: dict[str, Any] = {}
 LAST_MONTH_UPDATE: datetime | None = None
 INVERT_SOLAR: bool = True
+
+
+def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return config data with sensitive auth values hidden for logging."""
+    return {
+        key: "***" if key in SENSITIVE_CONFIG_KEYS else value
+        for key, value in data.items()
+    }
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -82,13 +102,41 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
-                INVERT_SOLAR: conf[SOLAR_INVERT],
-                CUSTOMER_GID: conf[CUSTOMER_GID],
-                CONFIG_TITLE: conf[CONFIG_TITLE],
+                SOLAR_INVERT: conf[SOLAR_INVERT],
             },
         )
     )
     return True
+
+
+async def async_login_vue(
+    loop: asyncio.AbstractEventLoop,
+    vue: PyEmVue,
+    entry_data: Mapping[str, Any],
+) -> bool:
+    """Log in to Emporia using the configured authentication method."""
+    auth_method = entry_data.get(AUTH_METHOD, AUTH_METHOD_EMAIL_PASSWORD)
+    if auth_method == AUTH_METHOD_TOKENS:
+        return await loop.run_in_executor(
+            None,
+            partial(
+                vue.login,
+                id_token=entry_data[CONF_ID_TOKEN],
+                access_token=entry_data[CONF_ACCESS_TOKEN],
+                refresh_token=entry_data[CONF_REFRESH_TOKEN],
+            ),
+        )
+
+    email: str = entry_data[CONF_EMAIL]
+    password: str = entry_data[CONF_PASSWORD]
+    # support using the simulator by looking at the username
+    if email.startswith("vue_simulator@"):
+        host = email.split("@")[1]
+        return await loop.run_in_executor(None, vue.login_simulator, host)
+    return await loop.run_in_executor(
+        None,
+        partial(vue.login, username=email, password=password),
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -100,20 +148,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     DEVICE_INFORMATION = {}
 
     entry_data = entry.data
-    _LOGGER.debug("Setting up Emporia Vue with entry data: %s", entry_data)
-    email: str = entry_data[CONF_EMAIL]
-    password: str = entry_data[CONF_PASSWORD]
+    _LOGGER.debug(
+        "Setting up Emporia Vue with entry data: %s",
+        redact_config_data(entry_data),
+    )
     if SOLAR_INVERT in entry_data:
         INVERT_SOLAR = entry_data[SOLAR_INVERT]
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
-        # support using the simulator by looking at the username
-        if email.startswith("vue_simulator@"):
-            host = email.split("@")[1]
-            result: bool = await loop.run_in_executor(None, vue.login_simulator, host)
-        else:
-            result: bool = await loop.run_in_executor(None, vue.login, email, password)
+        result: bool = await async_login_vue(loop, vue, entry_data)
         if not result:
             _LOGGER.error("Failed to login to Emporia Vue")
             raise ConfigEntryAuthFailed("Failed to login to Emporia Vue")

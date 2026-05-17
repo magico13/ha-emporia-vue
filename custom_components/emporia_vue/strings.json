@@ -3,6 +3,11 @@
     "step": {
       "user": {
         "data": {
+          "auth_method": "Authentication method"
+        }
+      },
+      "email_password": {
+        "data": {
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
           "enable_1m": "Power Minute Average Sensor",
@@ -11,12 +16,24 @@
           "solar_invert": "Invert Values for Solar Circuits"
         }
       },
+      "tokens": {
+        "description": "Use this for Emporia accounts created with Sign in with Google or another SSO provider. Paste the Emporia tokens for the account.",
+        "data": {
+          "id_token": "ID token",
+          "access_token": "Access token",
+          "refresh_token": "Refresh token",
+          "enable_1m": "[%key:component::emporia_vue::config::step::email_password::data::enable_1m%]",
+          "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
+          "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
+          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
+        }
+      },
       "reconfigure": {
         "data": {
-          "enable_1m": "[%key:component::emporia_vue::config::step::user::data::enable_1m%]",
-          "enable_1d": "[%key:component::emporia_vue::config::step::user::data::enable_1d%]",
-          "enable_1mon": "[%key:component::emporia_vue::config::step::user::data::enable_1mon%]",
-          "solar_invert": "[%key:component::emporia_vue::config::step::user::data::solar_invert%]"
+          "enable_1m": "[%key:component::emporia_vue::config::step::email_password::data::enable_1m%]",
+          "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
+          "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
+          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
         }
       },
       "reauth_confirm": {
@@ -24,7 +41,10 @@
         "description": "The Emporia Vue integration needs to re-authenticate your account",
         "data": {
           "email": "[%key:common::config_flow::data::email%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "password": "[%key:common::config_flow::data::password%]",
+          "id_token": "[%key:component::emporia_vue::config::step::tokens::data::id_token%]",
+          "access_token": "[%key:component::emporia_vue::config::step::tokens::data::access_token%]",
+          "refresh_token": "[%key:component::emporia_vue::config::step::tokens::data::refresh_token%]"
         }
       }
     },

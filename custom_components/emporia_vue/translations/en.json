@@ -13,7 +13,10 @@
         "step": {
             "reauth_confirm": {
                 "data": {
+                    "access_token": "Access token",
                     "email": "Email",
+                    "id_token": "ID token",
+                    "refresh_token": "Refresh token",
                     "password": "Password"
                 },
                 "description": "The Emporia Vue integration needs to re-authenticate your account",
@@ -29,6 +32,11 @@
             },
             "user": {
                 "data": {
+                    "auth_method": "Authentication method"
+                }
+            },
+            "email_password": {
+                "data": {
                     "email": "Email",
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
@@ -36,6 +44,18 @@
                     "password": "Password",
                     "solar_invert": "Invert Values for Solar Circuits"
                 }
+            },
+            "tokens": {
+                "data": {
+                    "access_token": "Access token",
+                    "enable_1d": "Energy Today Sensor",
+                    "enable_1m": "Power Minute Average Sensor",
+                    "enable_1mon": "Energy This Month Sensor",
+                    "id_token": "ID token",
+                    "refresh_token": "Refresh token",
+                    "solar_invert": "Invert Values for Solar Circuits"
+                },
+                "description": "Use this for Emporia accounts created with Sign in with Google or another SSO provider. Paste the Emporia tokens for the account."
             }
         }
     },
