@@ -3,7 +3,7 @@
 from datetime import datetime
 import logging
 
-from pyemvue.device import VueDevice, VueDeviceChannel
+from pyemvue.device import VueDevice, VueDeviceChannel, ChargerDevice
 from pyemvue.enums import Scale
 
 from homeassistant.components.sensor import (
@@ -54,6 +54,20 @@ async def async_setup_entry(
         async_add_entities(
             CurrentVuePowerSensor(coordinator_day_sensor, identifier)
             for _, identifier in enumerate(coordinator_day_sensor.data)
+        )
+
+    # Add charger status sensors
+    coordinator_device_status = hass.data[DOMAIN][config_entry.entry_id][
+        "coordinator_device_status"
+    ]
+    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
+        "device_information"
+    ]
+    if coordinator_device_status and coordinator_device_status.data:
+        async_add_entities(
+            EmporiaChargerStatusSensor(coordinator_device_status, device_information[int(gid)])
+            for gid in coordinator_device_status.data
+            if int(gid) in device_information and device_information[int(gid)].ev_charger
         )
 
 
@@ -171,3 +185,94 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         if self._scale == Scale.MONTH.value:
             return "This Month"
         return self._scale
+
+
+# Known Emporia charger API responses (from historical data):
+#   Status: "Charging", "Standby", "DeviceNotConnected", ""
+#   Messages: "Charging", "Ready", "Off", "Self Test", "Offline",
+#             "EV is not accepting charge", "Connected to EV",
+#             "Please Wait", "Charging Halted", ""
+
+def _map_charger_state(status: str | None, message: str | None, fault_text: str | None) -> tuple[str, str]:
+    """Map Emporia charger status/message to a human-friendly state and IEC 61851 code."""
+    status_lower = (status or "").lower()
+    message_lower = (message or "").lower()
+    fault = (fault_text or "").strip()
+
+    # F: Fault condition
+    if fault or "error" in status_lower or "fault" in status_lower or "error" in message_lower or "fault" in message_lower:
+        return "Error", "F"
+    # C: Actively charging
+    if status_lower == "charging":
+        return "Charging", "C"
+    # A: Disconnected -  no EV present or device offline
+    if not status_lower:
+        return "Disconnected", "A"
+    if status_lower == "devicenotconnected":
+        return "Disconnected", "A"
+    if status_lower == "standby" and message_lower in ("ready", "off", "self test", "please wait"):
+        return "Disconnected", "A"
+    # B: Connected but not charging (default for unknown/unmapped states)
+    if status_lower != "standby":
+        _LOGGER.debug(
+            "Unmapped charger state: status=%s, message=%s", status, message
+        )
+    return "Connected", "B"
+
+
+CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
+
+class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+    """Representation of an Emporia Charger status sensor."""
+
+    def __init__(self, coordinator, device: VueDevice) -> None:
+        """Initialize the charger status sensor."""
+        super().__init__(coordinator)
+        self._device = device
+        self._device_gid = str(device.device_gid)
+        self._attr_has_entity_name = True
+        self._attr_name = "Status"
+        self._attr_translation_key = "charger_status"
+        self._attr_device_class = SensorDeviceClass.ENUM
+        self._attr_options = CHARGER_STATUS_OPTIONS
+        self._attr_icon = "mdi:ev-station"
+
+    @property
+    def native_value(self) -> str:
+        """Return the human-friendly charger status."""
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        if data:
+            state, _ = _map_charger_state(data.status, data.message, data.fault_text)
+            return state
+        return "Unknown"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Return IEC code and raw Emporia values as attributes."""
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        if data:
+            _, iec_code = _map_charger_state(data.status, data.message, data.fault_text)
+            return {
+                "iec_status": iec_code,
+                "raw_status": data.status,
+                "raw_message": data.message,
+                "fault_text": data.fault_text,
+            }
+        return {}
+
+    @property
+    def unique_id(self) -> str:
+        """Unique ID for the charger status sensor."""
+        return f"emporia_vue.charger_status_{self._device_gid}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
+            name=self._device.device_name,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+        )
+

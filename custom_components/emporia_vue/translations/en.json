@@ -59,6 +59,18 @@
             }
         }
     },
+    "entity": {
+        "number": {
+            "charge_current_limit": {
+                "name": "Current Limit"
+            }
+        },
+        "sensor": {
+            "charger_status": {
+                "name": "Status"
+            }
+        }
+    },
     "services": {
         "set_charger_current": {
             "description": "Sets the charging current for an EVSE/charger",

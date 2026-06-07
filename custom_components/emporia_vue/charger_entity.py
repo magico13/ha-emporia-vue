@@ -28,13 +28,12 @@ class EmporiaChargerEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._coordinator = coordinator
         self._device: VueDevice = device
         self._device_gid = str(device.device_gid)
         self._vue: pyemvue.PyEmVue = vue
         self._enabled_default: bool = enabled_default
 
-        self._attr_unit_of_measurement = units
+        self._attr_native_unit_of_measurement = units
         self._attr_device_class = device_class
         self._attr_has_entity_name = True
         self._attr_name = None
@@ -52,7 +51,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the device."""
-        data: ChargerDevice = self._coordinator.data[self._device_gid]
+        data: ChargerDevice = self.coordinator.data[self._device_gid]
         if data:
             return {
                 "charging_rate": data.charging_rate,

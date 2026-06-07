@@ -14,6 +14,7 @@ import dateutil.tz
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
+    OutletDevice,
     VueDevice,
     VueDeviceChannel,
     VueDeviceChannelUsage,
@@ -53,7 +54,7 @@ from .const import (
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "switch"]
+PLATFORMS: list[str] = ["sensor", "switch", "number"]
 SENSITIVE_CONFIG_KEYS = {
     CONF_PASSWORD,
     CONF_ID_TOKEN,
@@ -341,6 +342,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             await coordinator_day_sensor.async_config_entry_first_refresh()
 
+        # Check if any devices have outlets or chargers
+        has_controllable_devices = any(
+            device.outlet or device.ev_charger
+            for device in DEVICE_INFORMATION.values()
+        )
+
+        async def async_update_device_status() -> dict[str, Any]:
+            """Fetch device status (outlets and chargers)."""
+            try:
+                data: dict[str, Any] = {}
+                outlets: list[OutletDevice]
+                chargers: list[ChargerDevice]
+
+                outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
+
+                if outlets:
+                    for outlet in outlets:
+                        data[str(outlet.device_gid)] = outlet
+                if chargers:
+                    for charger in chargers:
+                        data[str(charger.device_gid)] = charger
+                return data
+            except Exception as err:
+                raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+
+        coordinator_device_status = None
+        if has_controllable_devices:
+            coordinator_device_status = DataUpdateCoordinator(
+                hass,
+                _LOGGER,
+                name="device_status",
+                update_method=async_update_device_status,
+                update_interval=timedelta(minutes=1),
+            )
+            await coordinator_device_status.async_config_entry_first_refresh()
+
         # Setup custom services
         async def handle_set_charger_current(call) -> None:
             """Handle setting the EV Charger current."""
@@ -458,6 +495,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_1min": coordinator_1min,
         "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
+        "coordinator_device_status": coordinator_device_status,
+        "device_information": DEVICE_INFORMATION,
     }
 
     try:

@@ -1,12 +1,10 @@
 """Platform for switch integration."""
 
-import asyncio
-from datetime import timedelta
 import logging
 from typing import Any
 
 from pyemvue import PyEmVue
-from pyemvue.device import ChargerDevice, OutletDevice, VueDevice
+from pyemvue.device import VueDevice
 from requests import exceptions
 
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
@@ -17,7 +15,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
-    UpdateFailed,
 )
 
 from .charger_entity import EmporiaChargerEntity
@@ -25,77 +22,38 @@ from .const import DOMAIN, VUE_DATA
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-device_information: dict[str, VueDevice] = {}  # data is the populated device objects
-
-
-async def __async_update_data(vue: PyEmVue):
-    """Fetch data from API endpoint.
-
-    This is the place to pre-process the data to lookup tables
-    so entities can quickly look up their data.
-    """
-    try:
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
-        data: dict[str, Any] = {}
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        outlets: list[OutletDevice]
-        chargers: list[ChargerDevice]
-        (outlets, chargers) = await loop.run_in_executor(None, vue.get_devices_status)
-        if outlets:
-            for outlet in outlets:
-                data[str(outlet.device_gid)] = outlet
-        if chargers:
-            for charger in chargers:
-                data[str(charger.device_gid)] = charger
-        return data
-    except Exception as err:
-        raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the sensor platform."""
+    """Set up the switch platform."""
     vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
+    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
+        "coordinator_device_status"
+    ]
+    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
+        "device_information"
+    ]
 
-    loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-    devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
-    for device in devices:
-        if device.outlet or device.ev_charger:
-            device_information[str(device.device_gid)] = device
-
-    async def async_update_data():
-        return await __async_update_data(
-            vue=vue,
-        )
-
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name="switch",
-        update_method=async_update_data,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(minutes=1),
-    )
-
-    await coordinator.async_refresh()
+    if coordinator is None or coordinator.data is None:
+        return
 
     switches = []
-    for _, gid in enumerate(coordinator.data):
-        if gid not in device_information:
+    for gid in coordinator.data:
+        int_gid = int(gid)
+        if int_gid not in device_information:
             continue
-        if device_information[gid].outlet:
-            switches.append(EmporiaOutletSwitch(coordinator, vue, gid))
-        elif device_information[gid].ev_charger:
+        device = device_information[int_gid]
+        if device.outlet:
+            switches.append(EmporiaOutletSwitch(coordinator, vue, gid, device))
+        elif device.ev_charger:
             switches.append(
                 EmporiaChargerSwitch(
                     coordinator,
                     vue,
-                    device_information[gid],
+                    device,
                     None,
                     SwitchDeviceClass.OUTLET,
                 )
@@ -108,30 +66,31 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
     """Representation of an Emporia Smart Outlet state."""
 
     def __init__(
-        self, coordinator: DataUpdateCoordinator[dict[str, Any]], vue: PyEmVue, gid: str
+        self,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        vue: PyEmVue,
+        gid: str,
+        device: VueDevice,
     ) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._vue = vue
         self._device_gid = gid
-        self._device: VueDevice = device_information[gid]
+        self._device: VueDevice = device
         self._attr_has_entity_name = True
         self._attr_name = None
         self._attr_device_class = SwitchDeviceClass.OUTLET
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None, self._vue.update_outlet, self.coordinator.data[self._device_gid], True
+        await self.hass.async_add_executor_job(
+            self._vue.update_outlet, self.coordinator.data[self._device_gid], True
         )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
+        await self.hass.async_add_executor_job(
             self._vue.update_outlet,
             self.coordinator.data[self._device_gid],
             False,
@@ -186,10 +145,8 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
 
     async def _update_switch(self, on: bool) -> None:
         """Update the switch."""
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         try:
-            await loop.run_in_executor(
-                None,
+            await self.hass.async_add_executor_job(
                 self._vue.update_charger,
                 self.coordinator.data[self._device_gid],
                 on,
