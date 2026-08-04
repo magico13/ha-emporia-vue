@@ -28,6 +28,7 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
+    PASSWORD_SELECTOR,
     SOLAR_INVERT,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
@@ -54,7 +55,11 @@ class VueHub:
 
     def __init__(self) -> None:
         """Initialize."""
-        self.vue = PyEmVue()
+        # Import lazily so the config flow handler can load even if the
+        # compatibility layer fails; the failure is then shown in the form.
+        from .api_v1 import apply_v1_compatibility
+
+        self.vue = apply_v1_compatibility(PyEmVue())
 
     async def authenticate(self, data: dict | Mapping[str, Any]) -> bool:
         """Test if we can authenticate with the host."""
@@ -141,7 +146,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Emporia Vue."""
 
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
     async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
@@ -323,9 +327,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="reauth_confirm",
                 data_schema=vol.Schema(
                     {
-                        vol.Required(CONF_ID_TOKEN): cv.string,
-                        vol.Required(CONF_ACCESS_TOKEN): cv.string,
-                        vol.Required(CONF_REFRESH_TOKEN): cv.string,
+                        vol.Required(CONF_ID_TOKEN): PASSWORD_SELECTOR,
+                        vol.Required(CONF_ACCESS_TOKEN): PASSWORD_SELECTOR,
+                        vol.Required(CONF_REFRESH_TOKEN): PASSWORD_SELECTOR,
                     }
                 ),
                 errors=errors,
@@ -337,7 +341,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_EMAIL, default=existing_entry.data[CONF_EMAIL]
                     ): cv.string,
-                    vol.Required(CONF_PASSWORD): cv.string,
+                    vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
                 }
             ),
             errors=errors,

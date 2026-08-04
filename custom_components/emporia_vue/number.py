@@ -8,31 +8,27 @@ from pyemvue.device import VueDevice
 from requests import exceptions
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfElectricCurrent
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from . import EmporiaVueConfigEntry
 from .charger_entity import EmporiaChargerEntity
-from .const import DOMAIN, VUE_DATA
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: EmporiaVueConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the number platform."""
-    vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
-    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
-        "device_information"
-    ]
+    data = config_entry.runtime_data
+    vue: PyEmVue = data.vue
+    coordinator: DataUpdateCoordinator | None = data.coordinator_device_status
+    device_information: dict[int, VueDevice] = data.device_information
 
     if coordinator is None or coordinator.data is None:
         return
@@ -44,9 +40,7 @@ async def async_setup_entry(
             continue
         device = device_information[int_gid]
         if device.ev_charger:
-            entities.append(
-                EmporiaChargerCurrentNumber(coordinator, vue, device)
-            )
+            entities.append(EmporiaChargerCurrentNumber(coordinator, vue, device))
 
     async_add_entities(entities)
 

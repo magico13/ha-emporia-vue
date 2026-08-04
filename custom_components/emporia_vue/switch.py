@@ -8,7 +8,6 @@ from pyemvue.device import VueDevice
 from requests import exceptions
 
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -17,25 +16,23 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
+from . import EmporiaVueConfigEntry
 from .charger_entity import EmporiaChargerEntity
-from .const import DOMAIN, VUE_DATA
+from .const import DOMAIN
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: EmporiaVueConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the switch platform."""
-    vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
-    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
-        "device_information"
-    ]
+    data = config_entry.runtime_data
+    vue: PyEmVue = data.vue
+    coordinator: DataUpdateCoordinator | None = data.coordinator_device_status
+    device_information: dict[int, VueDevice] = data.device_information
 
     if coordinator is None or coordinator.data is None:
         return
@@ -109,22 +106,24 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
         )
 
     @property
+    def available(self) -> bool:
+        """Return True if the coordinator has current data for this device."""
+        return (
+            super().available
+            and self.coordinator.data is not None
+            and self._device_gid in self.coordinator.data
+        )
+
+    @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device_gid].outlet_on
+        device_status = self.coordinator.data.get(self._device_gid)
+        return bool(device_status and device_status.outlet_on)
 
     @property
     def unique_id(self) -> str:
         """Unique ID for the switch."""
         return f"switch.emporia_vue.{self._device_gid}"
-
-    def turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
-        raise NotImplementedError
-
-    def turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
-        raise NotImplementedError
 
 
 class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
@@ -141,7 +140,8 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
     @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device_gid].charger_on
+        device_status = self.coordinator.data.get(self._device_gid)
+        return bool(device_status and device_status.charger_on)
 
     async def _update_switch(self, on: bool) -> None:
         """Update the switch."""
@@ -159,11 +159,3 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
             )
             raise
         await self.coordinator.async_request_refresh()
-
-    def turn_on(self, **kwargs: Any) -> None:
-        """Turn the charger on."""
-        raise NotImplementedError
-
-    def turn_off(self, **kwargs: Any) -> None:
-        """Turn the charger off."""
-        raise NotImplementedError

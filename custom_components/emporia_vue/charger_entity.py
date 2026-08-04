@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pyemvue import pyemvue
+from pyemvue import PyEmVue
 from pyemvue.device import ChargerDevice, VueDevice
 
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -20,7 +20,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
     def __init__(
         self,
         coordinator: DataUpdateCoordinator[dict[str, Any]],
-        vue: pyemvue.PyEmVue,
+        vue: PyEmVue,
         device: VueDevice,
         units: str | None,
         device_class: str,
@@ -30,7 +30,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
         super().__init__(coordinator)
         self._device: VueDevice = device
         self._device_gid = str(device.device_gid)
-        self._vue: pyemvue.PyEmVue = vue
+        self._vue: PyEmVue = vue
         self._enabled_default: bool = enabled_default
 
         self._attr_native_unit_of_measurement = units
@@ -40,8 +40,12 @@ class EmporiaChargerEntity(CoordinatorEntity):
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available."""
-        return self._device is not None
+        """Return True if the coordinator has current status data for this device."""
+        return (
+            super().available
+            and self.coordinator.data is not None
+            and self._device_gid in self.coordinator.data
+        )
 
     @property
     def entity_registry_enabled_default(self) -> bool:
@@ -51,7 +55,7 @@ class EmporiaChargerEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the device."""
-        data: ChargerDevice = self.coordinator.data[self._device_gid]
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
         if data:
             return {
                 "charging_rate": data.charging_rate,

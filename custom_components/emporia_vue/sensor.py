@@ -3,7 +3,7 @@
 from datetime import datetime
 import logging
 
-from pyemvue.device import VueDevice, VueDeviceChannel, ChargerDevice
+from pyemvue.device import ChargerDevice, VueDevice, VueDeviceChannel
 from pyemvue.enums import Scale
 
 from homeassistant.components.sensor import (
@@ -11,64 +11,75 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
+from . import EmporiaVueConfigEntry
 from .const import DOMAIN
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
-# def setup_platform(hass, config, add_entities, discovery_info=None):
+class _MissingChannelError(Exception):
+    """Raised internally when a coordinator entry has no matching device channel."""
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: EmporiaVueConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform."""
-    coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
-    coordinator_1mon = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1mon"]
-    coordinator_day_sensor = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_day_sensor"
-    ]
+    data = config_entry.runtime_data
+    coordinator_1min = data.coordinator_1min
+    coordinator_1mon = data.coordinator_1mon
+    coordinator_day_sensor = data.coordinator_day_sensor
+    coordinator_device_status = data.coordinator_device_status
+    device_information: dict[int, VueDevice] = data.device_information
 
-    _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+    _LOGGER.debug(
+        "Setting up sensor platform for entry %s with %d known devices",
+        config_entry.entry_id,
+        len(device_information),
+    )
 
     if coordinator_1min:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, identifier)
-            for _, identifier in enumerate(coordinator_1min.data)
-        )
+        async_add_entities(_build_power_sensors(coordinator_1min))
 
     if coordinator_1mon:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1mon, identifier)
-            for _, identifier in enumerate(coordinator_1mon.data)
-        )
+        async_add_entities(_build_power_sensors(coordinator_1mon))
 
     if coordinator_day_sensor:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_day_sensor, identifier)
-            for _, identifier in enumerate(coordinator_day_sensor.data)
-        )
+        async_add_entities(_build_power_sensors(coordinator_day_sensor))
 
     # Add charger status sensors
-    coordinator_device_status = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
-    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
-        "device_information"
-    ]
     if coordinator_device_status and coordinator_device_status.data:
         async_add_entities(
             EmporiaChargerStatusSensor(coordinator_device_status, device_information[int(gid)])
             for gid in coordinator_device_status.data
             if int(gid) in device_information and device_information[int(gid)].ev_charger
         )
+
+
+def _build_power_sensors(
+    coordinator: DataUpdateCoordinator,
+) -> list["CurrentVuePowerSensor"]:
+    """Build power/energy sensors for a coordinator, skipping any bad entries.
+
+    A single identifier with no matching device channel (e.g. transient API
+    data) shouldn't abort the whole platform setup, so entities that fail to
+    resolve a channel are logged and skipped instead of raised.
+    """
+    sensors: list[CurrentVuePowerSensor] = []
+    for identifier in coordinator.data:
+        try:
+            sensors.append(CurrentVuePowerSensor(coordinator, identifier))
+        except _MissingChannelError:
+            continue
+    return sensors
 
 
 class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
@@ -90,13 +101,11 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
                     break
         if final_channel is None:
             _LOGGER.warning(
-                "No channel found for device_gid %s and channel_num %s",
+                "No channel found for device_gid %s and channel_num %s; skipping sensor",
                 device_gid,
                 channel_num,
             )
-            raise RuntimeError(
-                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
-            )
+            raise _MissingChannelError(identifier)
         self._channel: VueDeviceChannel = final_channel
         self._iskwh = self.scale_is_energy()
 
@@ -119,9 +128,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         """Return the device info."""
         device_name = self._channel.name or self._device.device_name
         return DeviceInfo(
-            identifiers={
-                (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
-            },
+            identifiers={(DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")},
             name=device_name,
             model=self._device.model,
             sw_version=self._device.firmware,
@@ -163,9 +170,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         elif self._scale == Scale.SECOND.value:
             usage = 3600 * 1000 * usage  # convert to rate
         elif self._scale == Scale.MINUTES_15.value:
-            usage = (
-                4 * 1000 * usage
-            )  # this might never be used but for safety, convert to rate
+            usage = 4 * 1000 * usage  # this might never be used but for safety, convert to rate
         return usage
 
     def scale_is_energy(self):
@@ -193,14 +198,23 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
 #             "EV is not accepting charge", "Connected to EV",
 #             "Please Wait", "Charging Halted", ""
 
-def _map_charger_state(status: str | None, message: str | None, fault_text: str | None) -> tuple[str, str]:
+
+def _map_charger_state(
+    status: str | None, message: str | None, fault_text: str | None
+) -> tuple[str, str]:
     """Map Emporia charger status/message to a human-friendly state and IEC 61851 code."""
     status_lower = (status or "").lower()
     message_lower = (message or "").lower()
     fault = (fault_text or "").strip()
 
     # F: Fault condition
-    if fault or "error" in status_lower or "fault" in status_lower or "error" in message_lower or "fault" in message_lower:
+    if (
+        fault
+        or "error" in status_lower
+        or "fault" in status_lower
+        or "error" in message_lower
+        or "fault" in message_lower
+    ):
         return "Error", "F"
     # C: Actively charging
     if status_lower == "charging":
@@ -214,13 +228,12 @@ def _map_charger_state(status: str | None, message: str | None, fault_text: str 
         return "Disconnected", "A"
     # B: Connected but not charging (default for unknown/unmapped states)
     if status_lower != "standby":
-        _LOGGER.debug(
-            "Unmapped charger state: status=%s, message=%s", status, message
-        )
+        _LOGGER.debug("Unmapped charger state: status=%s, message=%s", status, message)
     return "Connected", "B"
 
 
 CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
+
 
 class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     """Representation of an Emporia Charger status sensor."""
@@ -236,6 +249,15 @@ class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: igno
         self._attr_device_class = SensorDeviceClass.ENUM
         self._attr_options = CHARGER_STATUS_OPTIONS
         self._attr_icon = "mdi:ev-station"
+
+    @property
+    def available(self) -> bool:
+        """Return True if the coordinator has current data for this device."""
+        return (
+            super().available
+            and self.coordinator.data is not None
+            and self._device_gid in self.coordinator.data
+        )
 
     @property
     def native_value(self) -> str:
@@ -275,4 +297,3 @@ class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: igno
             sw_version=self._device.firmware,
             manufacturer="Emporia",
         )
-

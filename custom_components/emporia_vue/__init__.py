@@ -1,20 +1,19 @@
 """The Emporia Vue integration."""
 
-import asyncio
 import calendar
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 from functools import partial
 import logging
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 import dateutil.relativedelta
 import dateutil.tz
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
-    OutletDevice,
     VueDevice,
     VueDeviceChannel,
     VueDeviceChannelUsage,
@@ -49,7 +48,6 @@ from .const import (
     ENABLE_1M,
     ENABLE_1MON,
     SOLAR_INVERT,
-    VUE_DATA,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -67,15 +65,32 @@ CONFIG_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
-DEVICE_GIDS: list[str] = []
-DEVICE_INFORMATION: dict[int, VueDevice] = {}
-DEVICES_ONLINE: list[str] = []
-LAST_MINUTE_DATA: dict[str, Any] = {}
-LAST_DAY_DATA: dict[str, Any] = {}
-LAST_DAY_UPDATE: datetime | None = None
-LAST_MONTH_DATA: dict[str, Any] = {}
-LAST_MONTH_UPDATE: datetime | None = None
-INVERT_SOLAR: bool = True
+
+@dataclass
+class EmporiaVueData:
+    """Mutable runtime state for a single Emporia Vue config entry.
+
+    This is kept on the config entry itself (`entry.runtime_data`) rather
+    than as module-level globals so that entry reloads and (future)
+    multiple accounts can't clobber each other's device/usage caches.
+    """
+
+    vue: PyEmVue
+    invert_solar: bool = True
+    device_gids: list[str] = field(default_factory=list)
+    device_information: dict[int, VueDevice] = field(default_factory=dict)
+    last_minute_data: dict[str, Any] = field(default_factory=dict)
+    last_day_data: dict[str, Any] = field(default_factory=dict)
+    last_day_update: datetime | None = None
+    last_month_data: dict[str, Any] = field(default_factory=dict)
+    last_month_update: datetime | None = None
+    coordinator_1min: DataUpdateCoordinator | None = None
+    coordinator_1mon: DataUpdateCoordinator | None = None
+    coordinator_day_sensor: DataUpdateCoordinator | None = None
+    coordinator_device_status: DataUpdateCoordinator | None = None
+
+
+EmporiaVueConfigEntry: TypeAlias = ConfigEntry[EmporiaVueData]
 
 
 def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
@@ -88,7 +103,6 @@ def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Emporia Vue component."""
-    hass.data.setdefault(DOMAIN, {})
     conf = config.get(DOMAIN)
     if not conf:
         return True
@@ -111,15 +125,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_login_vue(
-    loop: asyncio.AbstractEventLoop,
+    hass: HomeAssistant,
     vue: PyEmVue,
     entry_data: Mapping[str, Any],
 ) -> bool:
     """Log in to Emporia using the configured authentication method."""
     auth_method = entry_data.get(AUTH_METHOD, AUTH_METHOD_EMAIL_PASSWORD)
     if auth_method == AUTH_METHOD_TOKENS:
-        return await loop.run_in_executor(
-            None,
+        return await hass.async_add_executor_job(
             partial(
                 vue.login,
                 id_token=entry_data[CONF_ID_TOKEN],
@@ -133,34 +146,32 @@ async def async_login_vue(
     # support using the simulator by looking at the username
     if email.startswith("vue_simulator@"):
         host = email.split("@")[1]
-        return await loop.run_in_executor(None, vue.login_simulator, host)
-    return await loop.run_in_executor(
-        None,
+        return await hass.async_add_executor_job(vue.login_simulator, host)
+    return await hass.async_add_executor_job(
         partial(vue.login, username=email, password=password),
     )
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: EmporiaVueConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
-    global DEVICE_GIDS
-    global DEVICE_INFORMATION
-    global INVERT_SOLAR
-    DEVICE_GIDS = []
-    DEVICE_INFORMATION = {}
-
     entry_data = entry.data
     _LOGGER.debug(
         "Setting up Emporia Vue with entry data: %s",
         redact_config_data(entry_data),
     )
-    if SOLAR_INVERT in entry_data:
-        INVERT_SOLAR = entry_data[SOLAR_INVERT]
-    vue = PyEmVue()
-    loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+    # Import lazily so a failure in the compatibility layer surfaces as a
+    # normal setup error rather than an import-time failure of this module.
+    from .api_v1 import apply_v1_compatibility
+
+    vue = apply_v1_compatibility(PyEmVue())
+    data = EmporiaVueData(
+        vue=vue,
+        invert_solar=entry_data.get(SOLAR_INVERT, True),
+    )
+
     try:
-        result: bool = await async_login_vue(loop, vue, entry_data)
+        result: bool = await async_login_vue(hass, vue, entry_data)
         if not result:
-            _LOGGER.error("Failed to login to Emporia Vue")
             raise ConfigEntryAuthFailed("Failed to login to Emporia Vue")
     except ConfigEntryAuthFailed:
         raise
@@ -198,306 +209,282 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
-        for device in devices:
-            if str(device.device_gid) not in DEVICE_GIDS:
-                DEVICE_GIDS.append(str(device.device_gid))
-                _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
-                DEVICE_INFORMATION[device.device_gid] = device
-            else:
-                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+        devices: list[VueDevice] = await hass.async_add_executor_job(vue.get_devices)
+    except (requests.exceptions.RequestException, OSError) as err:
+        raise ConfigEntryNotReady(f"Error fetching Emporia Vue devices: {err}") from err
 
-        total_channels = 0
-        for device in DEVICE_INFORMATION.values():
-            total_channels += len(device.channels)
-        _LOGGER.info(
-            "Found %s Emporia devices with %s total channels",
-            len(DEVICE_INFORMATION.keys()),
-            total_channels,
+    for device in devices:
+        if str(device.device_gid) not in data.device_gids:
+            data.device_gids.append(str(device.device_gid))
+            _LOGGER.info("Adding gid %s to device list", device.device_gid)
+            data.device_information[device.device_gid] = device
+        else:
+            data.device_information[device.device_gid].channels += device.channels
+
+    total_channels = sum(len(device.channels) for device in data.device_information.values())
+    _LOGGER.info(
+        "Found %s Emporia devices with %s total channels",
+        len(data.device_information),
+        total_channels,
+    )
+
+    async def async_update_data_1min() -> dict:
+        """Fetch data from API endpoint at a 1 minute interval.
+
+        This is the place to pre-process the data to lookup tables
+        so entities can quickly look up their data.
+        """
+        result_data: dict = await update_sensors(hass, vue, [Scale.MINUTE.value], data)
+        # store this, then have the daily sensors pull from it and integrate
+        # then the daily can "true up" hourly (or more frequent) in case it's incorrect
+        if result_data:
+            data.last_minute_data = result_data
+        return result_data
+
+    async def async_update_day_sensors() -> dict:
+        now: datetime = datetime.now(UTC)
+        if not data.last_day_update or (now - data.last_day_update) > timedelta(minutes=15):
+            _LOGGER.info("Updating day sensors")
+            data.last_day_update = now
+            updated_day_data = await update_sensors(hass, vue, [Scale.DAY.value], data)
+            apply_api_update_debounce(updated_day_data, data.last_day_data, "day")
+            data.last_day_data = updated_day_data
+        else:
+            # integrate the minute data
+            _LOGGER.info("Integrating minute data into day sensors")
+            if data.last_minute_data:
+                for identifier, minute_data in data.last_minute_data.items():
+                    device_gid, channel_gid, _ = identifier.split("-")
+                    day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
+                    if (
+                        minute_data
+                        and data.last_day_data
+                        and day_id in data.last_day_data
+                        and data.last_day_data[day_id]
+                        and "usage" in data.last_day_data[day_id]
+                        and data.last_day_data[day_id]["usage"] is not None
+                    ):
+                        # if we just passed midnight, then reset back to zero
+                        timestamp: datetime = minute_data["timestamp"]
+                        await check_for_midnight(hass, timestamp, int(device_gid), day_id, data)
+
+                        data.last_day_data[day_id]["usage"] += minute_data[
+                            "usage"
+                        ]  # already in kwh
+        return data.last_day_data
+
+    async def async_update_month_sensors() -> dict:
+        now: datetime = datetime.now(UTC)
+        if not data.last_month_update or (now - data.last_month_update) > timedelta(
+            minutes=30
+        ):
+            _LOGGER.info("Updating month sensors")
+            data.last_month_update = now
+            updated_month_data = await update_sensors(hass, vue, [Scale.MONTH.value], data)
+            apply_api_update_debounce(
+                updated_month_data,
+                data.last_month_data,
+                "month",
+            )
+            data.last_month_data = updated_month_data
+        else:
+            # integrate the minute data
+            _LOGGER.info("Integrating minute data into month sensors")
+            if data.last_minute_data:
+                for identifier, minute_data in data.last_minute_data.items():
+                    device_gid, channel_gid, _ = identifier.split("-")
+                    month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                    if (
+                        minute_data
+                        and data.last_month_data
+                        and month_id in data.last_month_data
+                        and data.last_month_data[month_id]
+                        and "usage" in data.last_month_data[month_id]
+                        and data.last_month_data[month_id]["usage"] is not None
+                    ):
+                        # if we just passed the billing cycle start, reset back to zero
+                        timestamp: datetime = minute_data["timestamp"]
+                        await check_for_new_month(
+                            hass, timestamp, int(device_gid), month_id, data
+                        )
+
+                        data.last_month_data[month_id]["usage"] += minute_data[
+                            "usage"
+                        ]  # already in kwh
+        return data.last_month_data
+
+    if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
+        data.coordinator_1min = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name="sensor",
+            update_method=async_update_data_1min,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(minutes=1),
+        )
+        await data.coordinator_1min.async_config_entry_first_refresh()
+        _LOGGER.debug("1min Update data: %s", data.coordinator_1min.data)
+
+    if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
+        data.coordinator_1mon = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name="sensor",
+            update_method=async_update_month_sensors,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(minutes=1),
+        )
+        await data.coordinator_1mon.async_config_entry_first_refresh()
+        _LOGGER.debug("1mon Update data: %s", data.coordinator_1mon.data)
+
+    if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
+        data.coordinator_day_sensor = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name="sensor",
+            update_method=async_update_day_sensors,
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(minutes=1),
+        )
+        await data.coordinator_day_sensor.async_config_entry_first_refresh()
+
+    # Check if any devices have outlets or chargers
+    has_controllable_devices = any(
+        device.outlet or device.ev_charger for device in data.device_information.values()
+    )
+
+    async def async_update_device_status() -> dict[str, Any]:
+        """Fetch device status (outlets and chargers)."""
+        try:
+            status_data: dict[str, Any] = {}
+            outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
+
+            if outlets:
+                for outlet in outlets:
+                    status_data[str(outlet.device_gid)] = outlet
+            if chargers:
+                for charger in chargers:
+                    status_data[str(charger.device_gid)] = charger
+            return status_data
+        except Exception as err:
+            raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+
+    if has_controllable_devices:
+        data.coordinator_device_status = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            name="device_status",
+            update_method=async_update_device_status,
+            update_interval=timedelta(minutes=1),
+        )
+        await data.coordinator_device_status.async_config_entry_first_refresh()
+
+    # Setup custom services
+    async def handle_set_charger_current(call) -> None:
+        """Handle setting the EV Charger current."""
+        _LOGGER.debug(
+            "executing set_charger_current: %s %s",
+            str(call.service),
+            str(call.data),
+        )
+        current = int(call.data.get("current"))
+        device_id: str | list[str] | None = call.data.get("device_id", None)
+        entity_id: str | list[str] | None = call.data.get("entity_id", None)
+
+        # if device or entity ids are strings, convert to list
+        if isinstance(device_id, str):
+            device_id = [device_id]
+        if isinstance(entity_id, str):
+            entity_id = [entity_id]
+
+        # technically we should loop through all the passed device and entities and update all
+        # but for now we'll just use the first one
+        charger_entity: er.RegistryEntry | None = None
+        entity_registry: er.EntityRegistry = er.async_get(hass)
+        if device_id:
+            entities: list[er.RegistryEntry] = er.async_entries_for_device(
+                entity_registry, device_id[0]
+            )
+            for reg_entity in entities:
+                _LOGGER.info("Entity is %s", str(reg_entity))
+                if reg_entity.entity_id.startswith("switch"):
+                    charger_entity = reg_entity
+                    break
+            if not charger_entity and entities:
+                charger_entity = entities[0]
+        elif entity_id:
+            charger_entity = entity_registry.async_get(entity_id[0])
+        if not charger_entity:
+            raise HomeAssistantError("Target device or Entity required.")
+
+        unique_entity_id: str = charger_entity.unique_id
+        gid_match: re.Match[str] | None = re.search(r"\d+", unique_entity_id)
+        if not gid_match:
+            raise HomeAssistantError(
+                f"Could not find device gid from unique id {unique_entity_id}"
+            )
+
+        charger_gid = int(gid_match.group(0))
+        if (
+            charger_gid not in data.device_information
+            or not data.device_information[charger_gid].ev_charger
+        ):
+            raise HomeAssistantError(
+                "Set Charging Current called on invalid device with entity id"
+                f" {charger_entity.entity_id} (unique id {unique_entity_id})"
+            )
+
+        state = hass.states.get(charger_entity.entity_id)
+        _LOGGER.info("State is %s", str(state))
+        if not state:
+            raise HomeAssistantError(
+                f"Could not find state for entity {charger_entity.entity_id}"
+            )
+        charger_info: VueDevice = data.device_information[charger_gid]
+        if charger_info.ev_charger is None:
+            raise HomeAssistantError(f"Could not find charger info for device {charger_gid}")
+        # Scale the current to a minimum of 6 amps and max of the circuit max
+        current = max(6, current)
+        current = min(current, charger_info.ev_charger.max_charging_rate)
+        _LOGGER.info("Setting charger %s to current of %d amps", charger_gid, current)
+
+        try:
+            updated_charger: ChargerDevice = await hass.async_add_executor_job(
+                vue.update_charger,
+                charger_info.ev_charger,
+                state.state == "on",
+                current,
+            )
+            data.device_information[charger_gid].ev_charger = updated_charger
+            # update the state of the charger entity using the updated data
+            new_state_obj: State | None = hass.states.get(charger_entity.entity_id)
+            if new_state_obj:
+                new_state: str = "on" if updated_charger.charger_on else "off"
+                new_attributes: dict = new_state_obj.attributes.copy()
+                new_attributes["charging_rate"] = updated_charger.charging_rate
+                # good enough for now, update the state in the registry
+                hass.states.async_set(charger_entity.entity_id, new_state, new_attributes)
+
+        except requests.exceptions.HTTPError as err:
+            _LOGGER.error(
+                "Error updating charger status: %s \nResponse body: %s",
+                err,
+                err.response.text,
+            )
+            raise
+
+    # Guard against double-registration on entry reload, and unregister the
+    # service when this (the only allowed) entry is unloaded.
+    if not hass.services.has_service(DOMAIN, "set_charger_current"):
+        hass.services.async_register(DOMAIN, "set_charger_current", handle_set_charger_current)
+        entry.async_on_unload(
+            lambda: hass.services.async_remove(DOMAIN, "set_charger_current")
         )
 
-        async def async_update_data_1min() -> dict:
-            """Fetch data from API endpoint at a 1 minute interval.
-
-            This is the place to pre-process the data to lookup tables
-            so entities can quickly look up their data.
-            """
-            data: dict = await update_sensors(vue, [Scale.MINUTE.value])
-            # store this, then have the daily sensors pull from it and integrate
-            # then the daily can "true up" hourly (or more frequent) in case it's incorrect
-            if data:
-                global LAST_MINUTE_DATA
-                LAST_MINUTE_DATA = data
-            return data
-
-        async def async_update_day_sensors() -> dict:
-            global LAST_DAY_UPDATE
-            global LAST_DAY_DATA
-            now: datetime = datetime.now(UTC)
-            if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
-                _LOGGER.info("Updating day sensors")
-                LAST_DAY_UPDATE = now
-                updated_day_data = await update_sensors(vue, [Scale.DAY.value])
-                apply_api_update_debounce(updated_day_data, LAST_DAY_DATA, "day")
-                LAST_DAY_DATA = updated_day_data
-            else:
-                # integrate the minute data
-                _LOGGER.info("Integrating minute data into day sensors")
-                if LAST_MINUTE_DATA:
-                    for identifier, data in LAST_MINUTE_DATA.items():
-                        device_gid, channel_gid, _ = identifier.split("-")
-                        day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
-                        if (
-                            data
-                            and LAST_DAY_DATA
-                            and day_id in LAST_DAY_DATA
-                            and LAST_DAY_DATA[day_id]
-                            and "usage" in LAST_DAY_DATA[day_id]
-                            and LAST_DAY_DATA[day_id]["usage"] is not None
-                        ):
-                            # if we just passed midnight, then reset back to zero
-                            timestamp: datetime = data["timestamp"]
-                            await check_for_midnight(timestamp, int(device_gid), day_id)
-
-                            LAST_DAY_DATA[day_id]["usage"] += data[
-                                "usage"
-                            ]  # already in kwh
-            return LAST_DAY_DATA
-
-        async def async_update_month_sensors() -> dict:
-            global LAST_MONTH_UPDATE
-            global LAST_MONTH_DATA
-            now: datetime = datetime.now(UTC)
-            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
-                _LOGGER.info("Updating month sensors")
-                LAST_MONTH_UPDATE = now
-                updated_month_data = await update_sensors(vue, [Scale.MONTH.value])
-                apply_api_update_debounce(
-                    updated_month_data,
-                    LAST_MONTH_DATA,
-                    "month",
-                )
-                LAST_MONTH_DATA = updated_month_data
-            else:
-                # integrate the minute data
-                _LOGGER.info("Integrating minute data into month sensors")
-                if LAST_MINUTE_DATA:
-                    for identifier, data in LAST_MINUTE_DATA.items():
-                        device_gid, channel_gid, _ = identifier.split("-")
-                        month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
-                        if (
-                            data
-                            and LAST_MONTH_DATA
-                            and month_id in LAST_MONTH_DATA
-                            and LAST_MONTH_DATA[month_id]
-                            and "usage" in LAST_MONTH_DATA[month_id]
-                            and LAST_MONTH_DATA[month_id]["usage"] is not None
-                        ):
-                            # if we just passed the billing cycle start, reset back to zero
-                            timestamp: datetime = data["timestamp"]
-                            await check_for_new_month(timestamp, int(device_gid), month_id)
-
-                            LAST_MONTH_DATA[month_id]["usage"] += data[
-                                "usage"
-                            ]  # already in kwh
-            return LAST_MONTH_DATA
-
-        coordinator_1min = None
-        if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
-            coordinator_1min = DataUpdateCoordinator(
-                hass,
-                _LOGGER,
-                # Name of the data. For logging purposes.
-                name="sensor",
-                update_method=async_update_data_1min,
-                # Polling interval. Will only be polled if there are subscribers.
-                update_interval=timedelta(minutes=1),
-            )
-            await coordinator_1min.async_config_entry_first_refresh()
-            _LOGGER.debug("1min Update data: %s", coordinator_1min.data)
-        coordinator_1mon = None
-        if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
-            coordinator_1mon = DataUpdateCoordinator(
-                hass,
-                _LOGGER,
-                # Name of the data. For logging purposes.
-                name="sensor",
-                update_method=async_update_month_sensors,
-                # Polling interval. Will only be polled if there are subscribers.
-                update_interval=timedelta(minutes=1),
-            )
-            await coordinator_1mon.async_config_entry_first_refresh()
-            _LOGGER.debug("1mon Update data: %s", coordinator_1mon.data)
-
-        coordinator_day_sensor = None
-        if ENABLE_1D not in entry_data or entry_data[ENABLE_1D]:
-            coordinator_day_sensor = DataUpdateCoordinator(
-                hass,
-                _LOGGER,
-                # Name of the data. For logging purposes.
-                name="sensor",
-                update_method=async_update_day_sensors,
-                # Polling interval. Will only be polled if there are subscribers.
-                update_interval=timedelta(minutes=1),
-            )
-            await coordinator_day_sensor.async_config_entry_first_refresh()
-
-        # Check if any devices have outlets or chargers
-        has_controllable_devices = any(
-            device.outlet or device.ev_charger
-            for device in DEVICE_INFORMATION.values()
-        )
-
-        async def async_update_device_status() -> dict[str, Any]:
-            """Fetch device status (outlets and chargers)."""
-            try:
-                data: dict[str, Any] = {}
-                outlets: list[OutletDevice]
-                chargers: list[ChargerDevice]
-
-                outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
-
-                if outlets:
-                    for outlet in outlets:
-                        data[str(outlet.device_gid)] = outlet
-                if chargers:
-                    for charger in chargers:
-                        data[str(charger.device_gid)] = charger
-                return data
-            except Exception as err:
-                raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
-
-        coordinator_device_status = None
-        if has_controllable_devices:
-            coordinator_device_status = DataUpdateCoordinator(
-                hass,
-                _LOGGER,
-                name="device_status",
-                update_method=async_update_device_status,
-                update_interval=timedelta(minutes=1),
-            )
-            await coordinator_device_status.async_config_entry_first_refresh()
-
-        # Setup custom services
-        async def handle_set_charger_current(call) -> None:
-            """Handle setting the EV Charger current."""
-            _LOGGER.debug(
-                "executing set_charger_current: %s %s",
-                str(call.service),
-                str(call.data),
-            )
-            current = call.data.get("current")
-            current = int(current)
-            device_id: str | list[str] | None = call.data.get("device_id", None)
-            entity_id: str | list[str] | None = call.data.get("entity_id", None)
-
-            # if device or entity ids are strings, convert to list
-            if isinstance(device_id, str):
-                device_id = [device_id]
-            if isinstance(entity_id, str):
-                entity_id = [entity_id]
-
-            # technically we should loop through all the passed device and entities and update all
-            # but for now we'll just use the first one
-            charger_entity: er.RegistryEntry | None = None
-            entity_registry: er.EntityRegistry = er.async_get(hass)
-            if device_id:
-                entities: list[er.RegistryEntry] = er.async_entries_for_device(
-                    entity_registry, device_id[0]
-                )
-                for entity in entities:
-                    _LOGGER.info("Entity is %s", str(entity))
-                    if entity.entity_id.startswith("switch"):
-                        charger_entity = entity
-                        break
-                if not charger_entity and entities:
-                    charger_entity = entities[0]
-            elif entity_id:
-                charger_entity = entity_registry.async_get(entity_id[0])
-            if not charger_entity:
-                raise HomeAssistantError("Target device or Entity required.")
-
-            unique_entity_id: str = charger_entity.unique_id
-            gid_match: re.Match[str] | None = re.search(r"\d+", unique_entity_id)
-            if not gid_match:
-                raise HomeAssistantError(
-                    f"Could not find device gid from unique id {unique_entity_id}"
-                )
-
-            charger_gid = int(gid_match.group(0))
-            if (
-                charger_gid not in DEVICE_INFORMATION
-                or not DEVICE_INFORMATION[charger_gid].ev_charger
-            ):
-                raise HomeAssistantError(
-                    "Set Charging Current called on invalid device with entity id"
-                    f" {charger_entity.entity_id} (unique id {unique_entity_id})"
-                )
-
-            state = hass.states.get(charger_entity.entity_id)
-            _LOGGER.info("State is %s", str(state))
-            if not state:
-                raise HomeAssistantError(
-                    f"Could not find state for entity {charger_entity.entity_id}"
-                )
-            charger_info: VueDevice = DEVICE_INFORMATION[charger_gid]
-            if charger_info.ev_charger is None:
-                raise HomeAssistantError(
-                    f"Could not find charger info for device {charger_gid}"
-                )
-            # Scale the current to a minimum of 6 amps and max of the circuit max
-            current: int = max(6, current)
-            current = min(current, charger_info.ev_charger.max_charging_rate)
-            _LOGGER.info(
-                "Setting charger %s to current of %d amps", charger_gid, current
-            )
-
-            try:
-                updated_charger: ChargerDevice = await loop.run_in_executor(
-                    None,
-                    vue.update_charger,
-                    charger_info.ev_charger,
-                    state.state == "on",
-                    current,
-                )
-                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
-                # update the state of the charger entity using the updated data
-                state: State | None = hass.states.get(charger_entity.entity_id)
-                if state:
-                    new_state: str = "on" if updated_charger.charger_on else "off"
-                    new_attributes: dict = state.attributes.copy()
-                    new_attributes["charging_rate"] = updated_charger.charging_rate
-                    # good enough for now, update the state in the registry
-                    hass.states.async_set(
-                        charger_entity.entity_id, new_state, new_attributes
-                    )
-
-            except requests.exceptions.HTTPError as err:
-                _LOGGER.error(
-                    "Error updating charger status: %s \nResponse body: %s",
-                    err,
-                    err.response.text,
-                )
-                raise
-
-        hass.services.async_register(
-            DOMAIN, "set_charger_current", handle_set_charger_current
-        )
-
-    except Exception as err:
-        _LOGGER.warning("Exception while setting up Emporia Vue. Will retry. %s", err)
-        raise ConfigEntryNotReady(
-            f"Exception while setting up Emporia Vue. Will retry. {err}"
-        ) from err
-
-    hass.data[DOMAIN][entry.entry_id] = {
-        VUE_DATA: vue,
-        "coordinator_1min": coordinator_1min,
-        "coordinator_1mon": coordinator_1mon,
-        "coordinator_day_sensor": coordinator_day_sensor,
-        "coordinator_device_status": coordinator_device_status,
-        "device_information": DEVICE_INFORMATION,
-    }
+    entry.runtime_data = data
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -508,54 +495,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: EmporiaVueConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok: bool = all(
-        await asyncio.gather(
-            *[
-                hass.config_entries.async_forward_entry_unload(entry, component)
-                for component in PLATFORMS
-            ]
-        )
-    )
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-
-    return unload_ok
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
-    """Fetch data from API endpoint."""
+async def update_sensors(
+    hass: HomeAssistant,
+    vue: PyEmVue,
+    scales: list[str],
+    data: EmporiaVueData,
+) -> dict:
+    """Fetch data from API endpoint.
+
+    Retries/backoff for transient API errors already live in
+    `api_v1.apply_v1_compatibility`'s `get_device_list_usage` patch, so this
+    function does not layer a second retry on top of that one.
+    """
     try:
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
-        data: dict = {}
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+        result_data: dict = {}
         for scale in scales:
             utcnow: datetime = datetime.now(UTC)
-            usage_dict: dict[int, VueUsageDevice] = await loop.run_in_executor(
-                None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+            usage_dict: dict[int, VueUsageDevice] = await hass.async_add_executor_job(
+                vue.get_device_list_usage, data.device_gids, utcnow, scale
             )
             if not usage_dict:
-                _LOGGER.warning(
-                    "No channels found during update for scale %s. Retrying", scale
-                )
-                usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
-                )
-            if usage_dict:
-                flattened, data_time = flatten_usage_data(usage_dict, scale)
-                await parse_flattened_usage_data(
-                    flattened,
-                    scale,
-                    data,
-                    utcnow,
-                    data_time,
-                )
-            else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
+            flattened, data_time = flatten_usage_data(usage_dict, scale)
+            await parse_flattened_usage_data(
+                hass,
+                flattened,
+                scale,
+                result_data,
+                utcnow,
+                data_time,
+                data,
+            )
 
-        return data
+        return result_data
+    except UpdateFailed:
+        raise
     except Exception as err:
         _LOGGER.error("Error communicating with Emporia API: %s", err)
         raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
@@ -575,26 +554,26 @@ def flatten_usage_data(
                 identifier: str = make_channel_id(channel, scale)
                 flattened[identifier] = channel
                 if channel.nested_devices:
-                    nested_flattened, _ = flatten_usage_data(
-                        channel.nested_devices, scale
-                    )
+                    nested_flattened, _ = flatten_usage_data(channel.nested_devices, scale)
                     flattened.update(nested_flattened)
     return (flattened, data_time)
 
 
 async def parse_flattened_usage_data(
+    hass: HomeAssistant,
     flattened_data: dict[str, VueDeviceChannelUsage],
     scale: str,
-    data: dict[str, Any],
+    result_data: dict[str, Any],
     requested_time: datetime,
     data_time: datetime,
+    data: EmporiaVueData,
 ) -> None:
     """Loop through the device list and find the corresponding update data."""
     unused_data: dict[str, VueDeviceChannelUsage] = flattened_data.copy()
-    for gid, info in DEVICE_INFORMATION.items():
-        local_time: datetime = await change_time_to_local(data_time, info.time_zone)
+    for gid, info in data.device_information.items():
+        local_time: datetime = await change_time_to_local(hass, data_time, info.time_zone)
         requested_time_local: datetime = await change_time_to_local(
-            requested_time, info.time_zone
+            hass, requested_time, info.time_zone
         )
         if abs((local_time - requested_time_local).total_seconds()) > 30:
             _LOGGER.warning(
@@ -631,7 +610,7 @@ async def parse_flattened_usage_data(
             # Use the last value if we have it, otherwise use zero
             fixed_usage: float = channel.usage if channel else 0.0
             if fixed_usage is None:
-                fixed_usage = handle_none_usage(scale, identifier)
+                fixed_usage = handle_none_usage(scale, identifier, data)
                 _LOGGER.info(
                     "Got None usage for device %s channel %s scale %s and timestamp %s. "
                     "Instead using a value of %s",
@@ -645,10 +624,10 @@ async def parse_flattened_usage_data(
             bidirectional = "bidirectional" in info_channel.type.lower()
             is_solar = info_channel.channel_type_gid == 13
             fixed_usage = fix_usage_sign(
-                channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
+                channel_num, fixed_usage, bidirectional, is_solar, data.invert_solar
             )
 
-            data[identifier] = {
+            result_data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
                 "usage": fixed_usage,
@@ -666,27 +645,23 @@ async def parse_flattened_usage_data(
         )
         channels_were_added = False
         for channel in unused_data.values():
-            channels_were_added |= await handle_special_channels_for_device(channel)
+            channels_were_added |= await handle_special_channels_for_device(channel, data)
             # we'll also need to register these entities I think. They might show up
             # automatically on the first run When we're done handling the unused data
             # we need to rerun the update
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
             await parse_flattened_usage_data(
-                flattened_data, scale, data, requested_time, data_time
+                hass, flattened_data, scale, result_data, requested_time, data_time, data
             )
 
 
-async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
+async def handle_special_channels_for_device(
+    channel: VueDeviceChannel, data: EmporiaVueData
+) -> bool:
     """Handle the special channels for a device, if they exist."""
-    if channel.device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[channel.device_gid]
-        # if channel.channel_num in [
-        #     "MainsFromGrid",
-        #     "MainsToGrid",
-        #     "Balance",
-        #     "TotalUsage",
-        # ]:
+    if channel.device_gid in data.device_information:
+        device_info: VueDevice = data.device_information[channel.device_gid]
         found = False
         channel_123: VueDeviceChannel | None = None
         for device_channel in device_info.channels:
@@ -752,29 +727,28 @@ def fix_usage_sign(
     return usage
 
 
-async def change_time_to_local(time: datetime, tz_string: str) -> datetime:
+async def change_time_to_local(hass: HomeAssistant, time: datetime, tz_string: str) -> datetime:
     """Change the datetime to the provided timezone, if not already."""
-    loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-    tz_info: tzinfo | None = await loop.run_in_executor(
-        None, dateutil.tz.gettz, tz_string
-    )
+    tz_info: tzinfo | None = await hass.async_add_executor_job(dateutil.tz.gettz, tz_string)
     if not time.tzinfo or time.tzinfo.utcoffset(time) is None:
         # unaware, assume it's already utc
         time = time.replace(tzinfo=UTC)
     return time.astimezone(tz_info)
 
 
-async def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
-    """If midnight has recently passed, reset the LAST_DAY_DATA for Day sensors to zero."""
-    if device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[device_gid]
-        local_time: datetime = await change_time_to_local(
-            timestamp, device_info.time_zone
-        )
-        local_midnight: datetime = local_time.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        last_reset = LAST_DAY_DATA[day_id]["reset"]
+async def check_for_midnight(
+    hass: HomeAssistant,
+    timestamp: datetime,
+    device_gid: int,
+    day_id: str,
+    data: EmporiaVueData,
+) -> None:
+    """If midnight has recently passed, reset the day data for Day sensors to zero."""
+    if device_gid in data.device_information:
+        device_info: VueDevice = data.device_information[device_gid]
+        local_time: datetime = await change_time_to_local(hass, timestamp, device_info.time_zone)
+        local_midnight: datetime = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        last_reset = data.last_day_data[day_id]["reset"]
         if local_midnight > last_reset:
             # New reset time found
             _LOGGER.info(
@@ -785,23 +759,27 @@ async def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
                 local_midnight,
                 last_reset,
             )
-            LAST_DAY_DATA[day_id]["usage"] = 0
-            LAST_DAY_DATA[day_id]["reset"] = local_midnight
+            data.last_day_data[day_id]["usage"] = 0
+            data.last_day_data[day_id]["reset"] = local_midnight
 
 
-async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: str):
-    """If a new billing cycle has started, reset the LAST_MONTH_DATA for Month sensors to zero."""
-    if device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[device_gid]
-        local_time: datetime = await change_time_to_local(
-            timestamp, device_info.time_zone
-        )
+async def check_for_new_month(
+    hass: HomeAssistant,
+    timestamp: datetime,
+    device_gid: int,
+    month_id: str,
+    data: EmporiaVueData,
+) -> None:
+    """If a new billing cycle has started, reset the month data for Month sensors to zero."""
+    if device_gid in data.device_information:
+        device_info: VueDevice = data.device_information[device_gid]
+        local_time: datetime = await change_time_to_local(hass, timestamp, device_info.time_zone)
         current_reset: datetime = determine_reset_datetime(
             local_time,
             device_info.billing_cycle_start_day,
             True,
         )
-        last_reset = LAST_MONTH_DATA[month_id]["reset"]
+        last_reset = data.last_month_data[month_id]["reset"]
         if current_reset > last_reset:
             # New billing cycle started
             _LOGGER.info(
@@ -812,56 +790,48 @@ async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: st
                 current_reset,
                 last_reset,
             )
-            LAST_MONTH_DATA[month_id]["usage"] = 0
-            LAST_MONTH_DATA[month_id]["reset"] = current_reset
+            data.last_month_data[month_id]["usage"] = 0
+            data.last_month_data[month_id]["reset"] = current_reset
 
 
 def determine_reset_datetime(
     local_time: datetime, monthly_cycle_start: int, is_month: bool
 ) -> datetime:
     """Determine the last reset datetime (aware) based on the passed time and cycle start date."""
-    reset_datetime: datetime = local_time.replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    reset_datetime: datetime = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
     if is_month:
         # Month should use the most recent billing_cycle_start_day midnight.
         # Never return a future reset datetime.
-        last_day_this_month = calendar.monthrange(
-            reset_datetime.year, reset_datetime.month
-        )[1]
+        last_day_this_month = calendar.monthrange(reset_datetime.year, reset_datetime.month)[1]
         target_day_this_month = min(monthly_cycle_start, last_day_this_month)
         candidate_this_month = reset_datetime.replace(day=target_day_this_month)
 
         if local_time >= candidate_this_month:
             reset_datetime = candidate_this_month
         else:
-            previous_month = reset_datetime - dateutil.relativedelta.relativedelta(
-                months=1
-            )
+            previous_month = reset_datetime - dateutil.relativedelta.relativedelta(months=1)
             last_day_previous_month = calendar.monthrange(
                 previous_month.year, previous_month.month
             )[1]
-            target_day_previous_month = min(
-                monthly_cycle_start, last_day_previous_month
-            )
+            target_day_previous_month = min(monthly_cycle_start, last_day_previous_month)
             reset_datetime = previous_month.replace(day=target_day_previous_month)
     return reset_datetime
 
 
-def handle_none_usage(scale: str, identifier: str):
+def handle_none_usage(scale: str, identifier: str, data: EmporiaVueData):
     """Handle the case of the usage being None by using the previous value or zero."""
     if (
         scale is Scale.MINUTE.value
-        and identifier in LAST_MINUTE_DATA
-        and "usage" in LAST_MINUTE_DATA[identifier]
+        and identifier in data.last_minute_data
+        and "usage" in data.last_minute_data[identifier]
     ):
-        return LAST_MINUTE_DATA[identifier]["usage"]
+        return data.last_minute_data[identifier]["usage"]
     if (
         scale is Scale.DAY.value
-        and identifier in LAST_DAY_DATA
-        and "usage" in LAST_DAY_DATA[identifier]
+        and identifier in data.last_day_data
+        and "usage" in data.last_day_data[identifier]
     ):
-        return LAST_DAY_DATA[identifier]["usage"]
+        return data.last_day_data[identifier]["usage"]
     return 0
 
 
