@@ -117,7 +117,20 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     @property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
-        device_name = self._channel.name or self._device.device_name
+        device_name = self._channel.name
+        if not device_name:
+            # An unnamed *numbered* channel is a CT that has not been configured
+            # in the Emporia app. Falling back to the monitor's name gives every
+            # such channel an identical name, so a Vue with spare channels shows
+            # up as a pile of same-named devices (#379, #328).
+            # Aggregate channels ("1,2,3", MainsFromGrid, Balance, ...) legitimately
+            # represent the monitor itself, so those keep the monitor's name.
+            if self._channel.channel_num.isdigit():
+                device_name = (
+                    f"{self._device.device_name} Circuit {self._channel.channel_num}"
+                )
+            else:
+                device_name = self._device.device_name
         return DeviceInfo(
             identifiers={
                 (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
