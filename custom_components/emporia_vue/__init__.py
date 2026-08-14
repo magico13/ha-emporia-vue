@@ -51,6 +51,7 @@ from .const import (
     SOLAR_INVERT,
     VUE_DATA,
 )
+from .helpers import merged_channel_is_bidirectional
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -643,6 +644,10 @@ async def parse_flattened_usage_data(
                 )
 
             bidirectional = "bidirectional" in info_channel.type.lower()
+            if not bidirectional:
+                bidirectional = merged_channel_is_bidirectional(
+                    info_channel, info.channels
+                )
             is_solar = info_channel.channel_type_gid == 13
             fixed_usage = fix_usage_sign(
                 channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
