@@ -98,6 +98,11 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
         await self.coordinator.async_request_refresh()
 
     @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self._device is not None
+
+    @property
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
         return DeviceInfo(
@@ -111,7 +116,9 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
     @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device_gid].outlet_on
+        if self.coordinator.data and self._device_gid in self.coordinator.data:
+            return self.coordinator.data[self._device_gid].outlet_on
+        return False
 
     @property
     def unique_id(self) -> str:
@@ -141,7 +148,9 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
     @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device_gid].charger_on
+        if self.coordinator.data and self._device_gid in self.coordinator.data:
+            return self.coordinator.data[self._device_gid].charger_on
+        return False
 
     async def _update_switch(self, on: bool) -> None:
         """Update the switch."""

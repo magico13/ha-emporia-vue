@@ -350,22 +350,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         async def async_update_device_status() -> dict[str, Any]:
             """Fetch device status (outlets and chargers)."""
-            try:
-                data: dict[str, Any] = {}
-                outlets: list[OutletDevice]
-                chargers: list[ChargerDevice]
+            max_attempts = 2
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    data: dict[str, Any] = {}
+                    outlets: list[OutletDevice]
+                    chargers: list[ChargerDevice]
 
-                outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
+                    outlets, chargers = await hass.async_add_executor_job(
+                        vue.get_devices_status
+                    )
 
-                if outlets:
-                    for outlet in outlets:
-                        data[str(outlet.device_gid)] = outlet
-                if chargers:
-                    for charger in chargers:
-                        data[str(charger.device_gid)] = charger
-                return data
-            except Exception as err:
-                raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+                    if outlets:
+                        for outlet in outlets:
+                            data[str(outlet.device_gid)] = outlet
+                    if chargers:
+                        for charger in chargers:
+                            data[str(charger.device_gid)] = charger
+                    return data
+                except Exception as err:
+                    if attempt < max_attempts:
+                        _LOGGER.warning(
+                            "Error communicating with Emporia API on attempt %s/%s: %s. Retrying in 2 seconds...",
+                            attempt,
+                            max_attempts,
+                            err,
+                        )
+                        await asyncio.sleep(2)
+                    else:
+                        raise UpdateFailed(
+                            f"Error communicating with Emporia API: {err}"
+                        ) from err
 
         coordinator_device_status = None
         if has_controllable_devices:

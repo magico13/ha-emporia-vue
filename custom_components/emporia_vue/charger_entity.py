@@ -20,10 +20,10 @@ class EmporiaChargerEntity(CoordinatorEntity):
     def __init__(
         self,
         coordinator: DataUpdateCoordinator[dict[str, Any]],
-        vue: pyemvue.PyEmVue,
+        vue: pyemvue.PyEmVue | None,
         device: VueDevice,
         units: str | None,
-        device_class: str,
+        device_class: str | None,
         enabled_default=True,
     ) -> None:
         """Initialize the sensor."""
@@ -51,18 +51,19 @@ class EmporiaChargerEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the device."""
-        data: ChargerDevice = self.coordinator.data[self._device_gid]
-        if data:
-            return {
-                "charging_rate": data.charging_rate,
-                "max_charging_rate": data.max_charging_rate,
-                "status": data.status,
-                "message": data.message,
-                "fault_text": data.fault_text,
-                "icon_name": data.icon,
-                "icon_label": data.icon_label,
-                "icon_detail_text": data.icon_detail_text,
-            }
+        if self.coordinator.data and self._device_gid in self.coordinator.data:
+            data: ChargerDevice = self.coordinator.data[self._device_gid]
+            if data:
+                return {
+                    "charging_rate": data.charging_rate,
+                    "max_charging_rate": data.max_charging_rate,
+                    "status": data.status,
+                    "message": data.message,
+                    "fault_text": data.fault_text,
+                    "icon_name": data.icon,
+                    "icon_label": data.icon_label,
+                    "icon_detail_text": data.icon_detail_text,
+                }
         return {}
 
     @property

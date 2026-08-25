@@ -83,9 +83,10 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
     @property
     def native_value(self) -> float | None:
         """Return the current charging rate."""
-        data = self.coordinator.data.get(self._device_gid)
-        if data:
-            return float(data.charging_rate)
+        if self.coordinator.data:
+            data = self.coordinator.data.get(self._device_gid)
+            if data:
+                return float(data.charging_rate)
         return None
 
     async def async_set_native_value(self, value: float) -> None:

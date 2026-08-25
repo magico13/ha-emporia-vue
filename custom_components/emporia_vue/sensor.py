@@ -18,6 +18,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -235,57 +236,50 @@ def _map_charger_state(status: str | None, message: str | None, fault_text: str 
 
 CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
 
-class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+class EmporiaChargerStatusSensor(EmporiaChargerEntity, SensorEntity):  # type: ignore
     """Representation of an Emporia Charger status sensor."""
 
     def __init__(self, coordinator, device: VueDevice) -> None:
         """Initialize the charger status sensor."""
-        super().__init__(coordinator)
-        self._device = device
-        self._device_gid = str(device.device_gid)
-        self._attr_has_entity_name = True
+        super().__init__(
+            coordinator,
+            None,
+            device,
+            None,
+            SensorDeviceClass.ENUM,
+        )
         self._attr_name = "Status"
         self._attr_translation_key = "charger_status"
-        self._attr_device_class = SensorDeviceClass.ENUM
         self._attr_options = CHARGER_STATUS_OPTIONS
         self._attr_icon = "mdi:ev-station"
 
     @property
     def native_value(self) -> str:
         """Return the human-friendly charger status."""
-        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
-        if data:
-            state, _ = _map_charger_state(data.status, data.message, data.fault_text)
-            return state
+        if self.coordinator.data:
+            data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+            if data:
+                state, _ = _map_charger_state(data.status, data.message, data.fault_text)
+                return state
         return "Unknown"
 
     @property
     def extra_state_attributes(self) -> dict[str, str | None]:
         """Return IEC code and raw Emporia values as attributes."""
-        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
-        if data:
-            _, iec_code = _map_charger_state(data.status, data.message, data.fault_text)
-            return {
-                "iec_status": iec_code,
-                "raw_status": data.status,
-                "raw_message": data.message,
-                "fault_text": data.fault_text,
-            }
+        if self.coordinator.data:
+            data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+            if data:
+                _, iec_code = _map_charger_state(data.status, data.message, data.fault_text)
+                return {
+                    "iec_status": iec_code,
+                    "raw_status": data.status,
+                    "raw_message": data.message,
+                    "fault_text": data.fault_text,
+                }
         return {}
 
     @property
     def unique_id(self) -> str:
         """Unique ID for the charger status sensor."""
         return f"emporia_vue.charger_status_{self._device_gid}"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
-            name=self._device.device_name,
-            model=self._device.model,
-            sw_version=self._device.firmware,
-            manufacturer="Emporia",
-        )
 
