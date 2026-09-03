@@ -41,6 +41,7 @@ from .const import (
     AUTH_METHOD_EMAIL_PASSWORD,
     AUTH_METHOD_TOKENS,
     CONF_ACCESS_TOKEN,
+    CONF_DEVICE_GIDS,
     CONF_ID_TOKEN,
     CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
@@ -51,6 +52,7 @@ from .const import (
     SOLAR_INVERT,
     VUE_DATA,
 )
+from .device_filter import filter_selected_devices
 from .resilience import TolerantUpdateMethod, is_newer_sample
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -150,9 +152,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
+    global LAST_DAY_DATA
+    global LAST_DAY_UPDATE
+    global LAST_MINUTE_DATA
+    global LAST_MONTH_DATA
+    global LAST_MONTH_UPDATE
     DEVICE_GIDS = []
     DEVICE_INFORMATION = {}
+    LAST_MINUTE_DATA = {}
+    LAST_DAY_DATA = {}
+    LAST_DAY_UPDATE = None
     LAST_DAY_INTEGRATED_MINUTE.clear()
+    LAST_MONTH_DATA = {}
+    LAST_MONTH_UPDATE = None
     LAST_MONTH_INTEGRATED_MINUTE.clear()
 
     entry_data = entry.data
@@ -205,7 +217,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
+        account_devices: list[VueDevice] = await loop.run_in_executor(
+            None, vue.get_devices
+        )
+        devices = filter_selected_devices(
+            account_devices, entry_data.get(CONF_DEVICE_GIDS)
+        )
+        if not devices:
+            raise ConfigEntryNotReady(
+                "None of the selected Emporia devices are available; "
+                "reconfigure the integration to update the selection"
+            )
         for device in devices:
             if str(device.device_gid) not in DEVICE_GIDS:
                 DEVICE_GIDS.append(str(device.device_gid))
@@ -401,10 +423,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 if outlets:
                     for outlet in outlets:
-                        data[str(outlet.device_gid)] = outlet
+                        if str(outlet.device_gid) in DEVICE_GIDS:
+                            data[str(outlet.device_gid)] = outlet
                 if chargers:
                     for charger in chargers:
-                        data[str(charger.device_gid)] = charger
+                        if str(charger.device_gid) in DEVICE_GIDS:
+                            data[str(charger.device_gid)] = charger
                 return data
             except Exception as err:
                 raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err

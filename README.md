@@ -43,7 +43,19 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 3. Click the `+` button at the bottom
 4. Search for "Emporia Vue" and add it. If you do not see it in the list, ensure that you have installed the integration.
 5. In the UI that opens, enter the email and password used for the Emporia App. If your account uses Google/Apple, see the [Google/Apple Accounts](#googleapple-accounts) section below.
-6. Done! You should now have a sensor for each "channel".
+6. Select the top-level Emporia device or devices that belong to this Home
+   Assistant instance. A selected device automatically includes devices nested
+   below it, such as outlets and EV chargers.
+7. Done! You should now have a sensor for each selected device "channel".
+
+The device selection supports both common multi-location arrangements:
+
+- Separate Home Assistant installations can use the same Emporia account and
+  select only the device for their location.
+- One Home Assistant installation can select multiple Emporia units at the
+  same location.
+
+Use **Reconfigure** on the integration to change the selected devices later.
 
 ### API Diagnostics
 

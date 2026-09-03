@@ -28,12 +28,20 @@
           "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
         }
       },
+      "devices": {
+        "title": "Select Emporia devices",
+        "description": "Choose the top-level devices to include in this Home Assistant instance. Selecting a device also includes any outlets, chargers, or other devices nested below it. You can select more than one device for homes with multiple units.",
+        "data": {
+          "device_gids": "Devices"
+        }
+      },
       "reconfigure": {
         "data": {
           "enable_1m": "[%key:component::emporia_vue::config::step::email_password::data::enable_1m%]",
           "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
-          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
+          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]",
+          "device_gids": "[%key:component::emporia_vue::config::step::devices::data::device_gids%]"
         }
       },
       "reauth_confirm": {
@@ -51,6 +59,8 @@
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "no_devices_selected": "Select at least one Emporia device",
+      "devices_changed": "The available devices changed. Review the list and try again",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {

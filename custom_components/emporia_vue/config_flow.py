@@ -7,11 +7,17 @@ import logging
 from typing import Any
 
 from pyemvue import PyEmVue
+from pyemvue.device import VueDevice
 import voluptuous as vol
 
 from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .const import (
     AUTH_METHOD,
@@ -19,6 +25,7 @@ from .const import (
     AUTH_METHOD_SCHEMA,
     AUTH_METHOD_TOKENS,
     CONF_ACCESS_TOKEN,
+    CONF_DEVICE_GIDS,
     CONF_ID_TOKEN,
     CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
@@ -31,6 +38,7 @@ from .const import (
     SOLAR_INVERT,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
+from .device_filter import device_gid, device_label, selectable_devices
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 SENSITIVE_CONFIG_KEYS = {
@@ -84,12 +92,10 @@ class VueHub:
         )
 
 
-async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-
-    Data has the keys from DATA_SCHEMA with values provided by the user.
-    """
-    hub = VueHub()
+async def _validate_input(
+    data: dict | Mapping[str, Any], hub: VueHub
+) -> dict[str, Any]:
+    """Validate input using the provided hub and build config entry data."""
     if not await hub.authenticate(data):
         raise InvalidAuth
 
@@ -137,11 +143,68 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
     return entry_data
 
 
+async def validate_input_with_devices(
+    data: dict | Mapping[str, Any],
+) -> tuple[dict[str, Any], list[VueDevice]]:
+    """Validate the input and return the devices available to the account."""
+    hub = VueHub()
+    entry_data = await _validate_input(data, hub)
+    loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+    devices: list[VueDevice] = await loop.run_in_executor(None, hub.vue.get_devices)
+    if not devices:
+        raise CannotConnect
+
+    return entry_data, devices
+
+
+async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the user input allows us to connect."""
+    return await _validate_input(data, VueHub())
+
+
+def device_select_schema(
+    devices: list[VueDevice], default: list[str] | None = None
+) -> vol.Schema:
+    """Build a multi-select schema for top-level Emporia devices."""
+    options = [
+        {"value": device_gid(device), "label": device_label(device)}
+        for device in devices
+    ]
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_DEVICE_GIDS,
+                default=default or [option["value"] for option in options],
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=options,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
+        }
+    )
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Emporia Vue."""
 
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    _pending_entry_data: dict[str, Any] | None = None
+    _selectable_devices: list[VueDevice] | None = None
+
+    async def _async_validate_credentials(
+        self, user_input: dict[str, Any], auth_method: str
+    ) -> config_entries.ConfigFlowResult:
+        """Validate credentials, then continue to device selection."""
+        user_input[AUTH_METHOD] = auth_method
+        info, devices = await validate_input_with_devices(user_input)
+        await self.async_set_unique_id(info[CUSTOMER_GID])
+        self._abort_if_unique_id_configured()
+        self._pending_entry_data = info
+        self._selectable_devices = selectable_devices(devices)
+        return await self.async_step_devices()
 
     async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
@@ -163,14 +226,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             try:
-                user_input[AUTH_METHOD] = AUTH_METHOD_EMAIL_PASSWORD
-                info = await validate_input(user_input)
-                # prevent setting up the same account twice
-                await self.async_set_unique_id(info[CUSTOMER_GID])
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=info[CONFIG_TITLE], data=info
+                return await self._async_validate_credentials(
+                    user_input, AUTH_METHOD_EMAIL_PASSWORD
                 )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -191,14 +248,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             try:
-                user_input[AUTH_METHOD] = AUTH_METHOD_TOKENS
-                info = await validate_input(user_input)
-                # prevent setting up the same account twice
-                await self.async_set_unique_id(info[CUSTOMER_GID])
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=info[CONFIG_TITLE], data=info
+                return await self._async_validate_credentials(
+                    user_input, AUTH_METHOD_TOKENS
                 )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -212,45 +263,98 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="tokens", data_schema=TOKEN_CONFIG_FLOW_SCHEMA, errors=errors
         )
 
+    async def async_step_devices(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Select which top-level devices this Home Assistant should include."""
+        if self._pending_entry_data is None or self._selectable_devices is None:
+            return self.async_abort(reason="cannot_connect")
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selected_gids = [str(gid) for gid in user_input.get(CONF_DEVICE_GIDS, [])]
+            available_gids = {device_gid(device) for device in self._selectable_devices}
+            if not selected_gids:
+                errors["base"] = "no_devices_selected"
+            elif not set(selected_gids).issubset(available_gids):
+                errors["base"] = "devices_changed"
+            else:
+                info = {
+                    **self._pending_entry_data,
+                    CONF_DEVICE_GIDS: selected_gids,
+                }
+                return self.async_create_entry(title=info[CONFIG_TITLE], data=info)
+
+        return self.async_show_form(
+            step_id="devices",
+            data_schema=device_select_schema(self._selectable_devices),
+            errors=errors,
+        )
+
     async def async_step_import(
         self, import_data: Mapping[str, Any]
     ) -> config_entries.ConfigFlowResult:
         """Import YAML configuration."""
-        return await self.async_step_email_password(dict(import_data))
+        data = dict(import_data)
+        data[AUTH_METHOD] = AUTH_METHOD_EMAIL_PASSWORD
+        info, devices = await validate_input_with_devices(data)
+        await self.async_set_unique_id(info[CUSTOMER_GID])
+        self._abort_if_unique_id_configured()
+        info[CONF_DEVICE_GIDS] = [
+            device_gid(device) for device in selectable_devices(devices)
+        ]
+        return self.async_create_entry(title=info[CONFIG_TITLE], data=info)
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Handle the reconfiguration step."""
         current_config = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        devices: list[VueDevice] = []
+        info = current_config.data
+        try:
+            info, account_devices = await validate_input_with_devices(
+                current_config.data
+            )
+            devices = selectable_devices(account_devices)
+        except CannotConnect:
+            errors["base"] = "cannot_connect"
+        except InvalidAuth:
+            errors["base"] = "invalid_auth"
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unexpected exception while listing Emporia devices")
+            errors["base"] = "unknown"
+
         if user_input is not None:
             _LOGGER.debug("User input on reconfigure was the following: %s", user_input)
             _LOGGER.debug(
                 "Current config is: %s",
                 redact_config_data(current_config.data),
             )
-            info = current_config.data
-            # if gid is not in current config, reauth and get gid again
-            if (
-                CUSTOMER_GID not in current_config.data
-                or not current_config.data[CUSTOMER_GID]
-            ):
-                info = await validate_input(current_config.data)
-
-            await self.async_set_unique_id(info[CUSTOMER_GID])
-            self._abort_if_unique_id_mismatch(reason="wrong_account")
-            data = {
-                ENABLE_1M: user_input[ENABLE_1M],
-                ENABLE_1D: user_input[ENABLE_1D],
-                ENABLE_1MON: user_input[ENABLE_1MON],
-                SOLAR_INVERT: user_input[SOLAR_INVERT],
-                CUSTOMER_GID: info[CUSTOMER_GID],
-                CONFIG_TITLE: info[CONFIG_TITLE],
-            }
-            return self.async_update_reload_and_abort(
-                self._get_reconfigure_entry(),
-                data_updates=data,
-            )
+            selected_gids = [str(gid) for gid in user_input.get(CONF_DEVICE_GIDS, [])]
+            available_gids = {device_gid(device) for device in devices}
+            if not errors:
+                if not selected_gids:
+                    errors["base"] = "no_devices_selected"
+                elif not set(selected_gids).issubset(available_gids):
+                    errors["base"] = "devices_changed"
+                else:
+                    await self.async_set_unique_id(info[CUSTOMER_GID])
+                    self._abort_if_unique_id_mismatch(reason="wrong_account")
+                    data = {
+                        ENABLE_1M: user_input[ENABLE_1M],
+                        ENABLE_1D: user_input[ENABLE_1D],
+                        ENABLE_1MON: user_input[ENABLE_1MON],
+                        SOLAR_INVERT: user_input[SOLAR_INVERT],
+                        CONF_DEVICE_GIDS: selected_gids,
+                        CUSTOMER_GID: info[CUSTOMER_GID],
+                        CONFIG_TITLE: info[CONFIG_TITLE],
+                    }
+                    return self.async_update_reload_and_abort(
+                        self._get_reconfigure_entry(),
+                        data_updates=data,
+                    )
 
         data_schema: dict[vol.Optional | vol.Required, Any] = {
             vol.Optional(
@@ -269,11 +373,32 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 SOLAR_INVERT,
                 default=current_config.data.get(SOLAR_INVERT, True),
             ): cv.boolean,
+            vol.Required(
+                CONF_DEVICE_GIDS,
+                default=[
+                    str(gid)
+                    for gid in current_config.data.get(
+                        CONF_DEVICE_GIDS,
+                        [device_gid(device) for device in devices],
+                    )
+                    if str(gid) in {device_gid(device) for device in devices}
+                ],
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        {"value": device_gid(device), "label": device_label(device)}
+                        for device in devices
+                    ],
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
         }
 
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=vol.Schema(data_schema),
+            errors=errors,
         )
 
     async def async_step_reauth(

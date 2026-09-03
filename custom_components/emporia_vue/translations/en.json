@@ -8,6 +8,8 @@
         "error": {
             "cannot_connect": "Failed to connect",
             "invalid_auth": "Invalid authentication",
+            "no_devices_selected": "Select at least one Emporia device",
+            "devices_changed": "The available devices changed. Review the list and try again",
             "unknown": "Unexpected error"
         },
         "step": {
@@ -24,11 +26,19 @@
             },
             "reconfigure": {
                 "data": {
+                    "device_gids": "Devices",
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
                     "solar_invert": "Invert Values for Solar Circuits"
                 }
+            },
+            "devices": {
+                "data": {
+                    "device_gids": "Devices"
+                },
+                "description": "Choose the top-level devices to include in this Home Assistant instance. Selecting a device also includes any outlets, chargers, or other devices nested below it. You can select more than one device for homes with multiple units.",
+                "title": "Select Emporia devices"
             },
             "user": {
                 "data": {
