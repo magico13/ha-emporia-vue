@@ -63,9 +63,13 @@ API recovers.
 
 ### Google/Apple Accounts
 
-If your Emporia account was created via Sign in with Google or Apple, the easiest solution is to **set an Emporia password** using the create account flow on the Emporia website or app using the same email address as you'd use with Google/Apple. Once set, you can log in using the standard email and password method above.
+Select **Sign in with Google** or **Sign in with Apple** when adding the integration, then complete sign-in in your browser. This requires Home Assistant 2025.4 or newer. The integration uses Home Assistant's native OAuth2/PKCE flow and stores the resulting Emporia tokens using the existing token refresh mechanism.
 
-If you are unable to set a password, the integration also supports token-based authentication. To obtain your tokens:
+The browser returns through [My Home Assistant](https://my.home-assistant.io/). Make sure it points to the same Home Assistant instance where you started setup. Your instance does not need to be publicly accessible, but your browser must be able to reach it. Sensor options can be changed using **Reconfigure** after setup.
+
+Authorization requests include `openid`, `email`, and `aws.cognito.signin.user.admin`. The last scope is required by Cognito's `GetUser` operation to read the signed-in user's profile; it does not grant AWS administrator privileges.
+
+Email/password and manually supplied tokens remain supported. To obtain tokens manually:
 
 1. Open [web.emporiaenergy.com](https://web.emporiaenergy.com) in a browser and sign in with Google/Apple.
 2. Open your browser's Developer Tools (F12) and go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox).
