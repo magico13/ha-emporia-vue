@@ -172,8 +172,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except ConfigEntryAuthFailed:
         raise
     except Exception as err:  # pylint: disable=broad-exception-caught
-        _LOGGER.error("Failed to login to Emporia Vue: %s", err)
-        raise ConfigEntryAuthFailed("Failed to login to Emporia Vue") from err
+        raise ConfigEntryNotReady(f"Failed to login to Emporia Vue: {err}") from err
 
     if entry_data.get(AUTH_METHOD) == AUTH_METHOD_TOKENS and vue.auth and vue.auth.tokens:
         # Persist the tokens refreshed during login back to the config entry so
