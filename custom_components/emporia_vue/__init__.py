@@ -36,6 +36,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .cognito_compat import apply_cognito_compat
 from .const import (
     AUTH_METHOD,
     AUTH_METHOD_EMAIL_PASSWORD,
@@ -52,6 +53,8 @@ from .const import (
     VUE_DATA,
 )
 from .resilience import TolerantUpdateMethod, is_newer_sample
+
+apply_cognito_compat()
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 

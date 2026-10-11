@@ -7,21 +7,27 @@ import logging
 from typing import Any
 
 from pyemvue import PyEmVue
+from pyemvue.auth import CLIENT_ID
 import voluptuous as vol
 
 from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 
 from .const import (
     AUTH_METHOD,
+    AUTH_METHOD_APPLE,
     AUTH_METHOD_EMAIL_PASSWORD,
+    AUTH_METHOD_GOOGLE,
     AUTH_METHOD_SCHEMA,
     AUTH_METHOD_TOKENS,
     CONF_ACCESS_TOKEN,
     CONF_ID_TOKEN,
+    CONF_OAUTH_PROVIDER,
     CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
+    CONFIG_OPTIONS_SCHEMA,
     CONFIG_TITLE,
     CUSTOMER_GID,
     DOMAIN,
@@ -31,6 +37,7 @@ from .const import (
     SOLAR_INVERT,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
+from .oauth import EmporiaOAuth2Implementation
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 SENSITIVE_CONFIG_KEYS = {
@@ -137,17 +144,87 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
     return entry_data
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle a config flow for Emporia Vue."""
 
     VERSION = 1
+    DOMAIN = DOMAIN
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    _oauth_provider: str | None = None
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Return the OAuth flow logger."""
+        return _LOGGER
+
+    @property
+    def extra_authorize_data(self) -> dict[str, str]:
+        """Request federated login and access to Cognito GetUser."""
+        return {
+            "scope": "openid email aws.cognito.signin.user.admin",
+            "identity_provider": (
+                "Google"
+                if self._oauth_provider == AUTH_METHOD_GOOGLE
+                else "SignInWithApple"
+            ),
+        }
+
+    async def _async_start_oauth(self, provider: str) -> config_entries.ConfigFlowResult:
+        """Create a native PKCE implementation belonging only to this flow."""
+        self._oauth_provider = provider
+        self.flow_impl = EmporiaOAuth2Implementation(
+            self.hass,
+            DOMAIN,
+            CLIENT_ID,
+            authorize_url="https://auth.emporiaenergy.com/oauth2/authorize",
+            token_url="https://auth.emporiaenergy.com/oauth2/token",
+        )
+        return await self.async_step_auth()
+
+    async def async_oauth_create_entry(self, data: dict) -> config_entries.ConfigFlowResult:
+        """Validate browser-issued tokens through the existing Emporia login."""
+        token = data["token"]
+        token_keys = (CONF_ID_TOKEN, CONF_ACCESS_TOKEN, CONF_REFRESH_TOKEN)
+        if any(
+            not isinstance(token.get(key), str) or not token[key] for key in token_keys
+        ):
+            return self.async_abort(reason="oauth_error")
+
+        options = vol.Schema(CONFIG_OPTIONS_SCHEMA)({})
+        if self.source == config_entries.SOURCE_REAUTH:
+            existing_entry = self._get_reauth_entry()
+            options.update({key: existing_entry.data[key] for key in options})
+        try:
+            info = await validate_input(
+                {
+                    **options,
+                    AUTH_METHOD: AUTH_METHOD_TOKENS,
+                    **{key: token[key] for key in token_keys},
+                }
+            )
+        except CannotConnect:
+            return self.async_abort(reason="cannot_connect")
+        except InvalidAuth:
+            return self.async_abort(reason="invalid_auth")
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to validate Emporia OAuth login")
+            return self.async_abort(reason="invalid_auth")
+
+        info[CONF_OAUTH_PROVIDER] = self._oauth_provider
+        await self.async_set_unique_id(info[CUSTOMER_GID])
+        if self.source == config_entries.SOURCE_REAUTH:
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(existing_entry, data_updates=info)
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(title=info[CONFIG_TITLE], data=info)
 
     async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
         if user_input is not None:
             if CONF_EMAIL in user_input and CONF_PASSWORD in user_input:
                 return await self.async_step_email_password(user_input)
+            if user_input[AUTH_METHOD] in (AUTH_METHOD_GOOGLE, AUTH_METHOD_APPLE):
+                return await self._async_start_oauth(user_input[AUTH_METHOD])
             if user_input[AUTH_METHOD] == AUTH_METHOD_TOKENS:
                 return await self.async_step_tokens()
             return await self.async_step_email_password()
@@ -280,7 +357,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, entry_data: Mapping[str, Any]
     ) -> config_entries.ConfigFlowResult:
         """Perform reauthentication upon an API authentication error."""
+        if entry_data.get(CONF_OAUTH_PROVIDER) in (AUTH_METHOD_GOOGLE, AUTH_METHOD_APPLE):
+            return await self.async_step_reauth_oauth()
         return await self.async_step_reauth_confirm(entry_data)
+
+    async def async_step_reauth_oauth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Ask before reopening the browser for an existing federated account."""
+        if user_input is not None:
+            return await self._async_start_oauth(
+                self._get_reauth_entry().data[CONF_OAUTH_PROVIDER]
+            )
+        return self.async_show_form(step_id="reauth_oauth", data_schema=vol.Schema({}))
 
     async def async_step_reauth_confirm(
         self, user_input: Mapping[str, Any] | None = None

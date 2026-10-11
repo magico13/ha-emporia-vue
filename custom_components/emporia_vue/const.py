@@ -10,6 +10,9 @@ VUE_DATA = "vue_data"
 AUTH_METHOD = "auth_method"
 AUTH_METHOD_EMAIL_PASSWORD = "email_password"
 AUTH_METHOD_TOKENS = "tokens"
+AUTH_METHOD_GOOGLE = "google"
+AUTH_METHOD_APPLE = "apple"
+CONF_OAUTH_PROVIDER = "oauth_provider"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_ID_TOKEN = "id_token"
 CONF_REFRESH_TOKEN = "refresh_token"
@@ -26,6 +29,8 @@ AUTH_METHOD_SCHEMA = vol.Schema(
         vol.Required(AUTH_METHOD, default=AUTH_METHOD_EMAIL_PASSWORD): vol.In(
             {
                 AUTH_METHOD_EMAIL_PASSWORD: "Emporia email and password",
+                AUTH_METHOD_GOOGLE: "Sign in with Google",
+                AUTH_METHOD_APPLE: "Sign in with Apple",
                 AUTH_METHOD_TOKENS: "Emporia tokens (Google/SSO accounts)",
             }
         ),

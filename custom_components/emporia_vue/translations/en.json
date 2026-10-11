@@ -1,6 +1,15 @@
 {
     "config": {
         "abort": {
+            "cannot_connect": "Failed to connect",
+            "invalid_auth": "Invalid authentication",
+            "wrong_account": "Sign in with the same Emporia account as this integration.",
+            "authorize_url_timeout": "Timed out starting authorization. Please try again.",
+            "oauth_error": "Emporia returned an incomplete or invalid token response.",
+            "oauth_failed": "Unable to complete authorization with Emporia. Please try again.",
+            "oauth_timeout": "Timed out completing authorization. Please try again.",
+            "oauth_unauthorized": "Authorization was rejected or expired. Please sign in again.",
+            "user_rejected_authorize": "Authorization was cancelled or rejected: {error}",
             "already_configured": "Device is already configured",
             "reauth_successful": "Re-authentication was successful",
             "reconfigure_successful": "Re-configuration was successful"
@@ -11,6 +20,10 @@
             "unknown": "Unexpected error"
         },
         "step": {
+            "reauth_oauth": {
+                "title": "Reauthenticate Emporia Vue",
+                "description": "Your Emporia authorization has expired. Continue to sign in again with your linked Google or Apple account."
+            },
             "reauth_confirm": {
                 "data": {
                     "access_token": "Access token",
