@@ -75,3 +75,7 @@ Email/password and manually supplied tokens remain supported. To obtain tokens m
 2. Open your browser's Developer Tools (F12) and go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox).
 3. Under **IndexedDB** → **com.amplify.awsCognitoAuthPlugin** → **default.store**, look for keys ending in `.hostedUi.idToken`, `.hostedUi.accessToken`, and `.hostedUi.refreshToken` - copy the values of all three, making sure to only keep the values within the quotes (should start with `eyJ` or similar)
 4. Use those values in the token authentication step of the integration setup.
+
+### Automatic Emporia circuit renames
+
+Emporia circuit names are refreshed from the account every 15 minutes. The integration updates the corresponding Home Assistant device names, which refreshes the power and energy sensor friendly names without changing their entity IDs or history. A name explicitly set on the Home Assistant device is respected. A brief Emporia API failure keeps the last known labels and telemetry continues.
