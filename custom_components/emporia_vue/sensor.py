@@ -9,7 +9,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTime
+from homeassistant.const import (
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,6 +27,8 @@ from .const import DOMAIN
 from .resilience import TolerantUpdateMethod
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+SPLIT_PHASE_MAINS_CHANNELS = ("Mains_A", "Mains_B", "Mains_C")
 
 
 # def setup_platform(hass, config, add_entities, discovery_info=None):
@@ -54,17 +61,33 @@ async def async_setup_entry(
         return True
 
     if coordinator_1min:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, identifier)
-            for identifier in coordinator_1min.data
-            if _is_channel_active(coordinator_1min, identifier)
-        )
+        power_sensors: list[SensorEntity] = []
+        voltage_sensors: list[SensorEntity] = []
+        for identifier in coordinator_1min.data:
+            if not _is_channel_active(coordinator_1min, identifier):
+                continue
+            channel_data = coordinator_1min.data[identifier]
+            channel_num = channel_data.get("channel_num")
+            if channel_num not in SPLIT_PHASE_MAINS_CHANNELS:
+                power_sensors.append(
+                    CurrentVuePowerSensor(coordinator_1min, identifier)
+                )
+            elif channel_data.get("voltage") is not None:
+                voltage_sensors.append(
+                    CurrentVueVoltageSensor(coordinator_1min, identifier)
+                )
+
+        async_add_entities(power_sensors)
+        if voltage_sensors:
+            async_add_entities(voltage_sensors)
 
     if coordinator_1mon:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1mon, identifier)
             for identifier in coordinator_1mon.data
             if _is_channel_active(coordinator_1mon, identifier)
+            and coordinator_1mon.data[identifier].get("channel_num")
+            not in SPLIT_PHASE_MAINS_CHANNELS
         )
 
     if coordinator_day_sensor:
@@ -72,6 +95,8 @@ async def async_setup_entry(
             CurrentVuePowerSensor(coordinator_day_sensor, identifier)
             for identifier in coordinator_day_sensor.data
             if _is_channel_active(coordinator_day_sensor, identifier)
+            and coordinator_day_sensor.data[identifier].get("channel_num")
+            not in SPLIT_PHASE_MAINS_CHANNELS
         )
 
     retry_update_methods: dict[str, TolerantUpdateMethod] = hass.data[DOMAIN][
@@ -145,7 +170,11 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             self._attr_device_class = SensorDeviceClass.POWER
             self._attr_state_class = SensorStateClass.MEASUREMENT
             self._attr_suggested_display_precision = 1
-            self._attr_name = f"Power {self.scale_readable()}"
+            if channel_num in SPLIT_PHASE_MAINS_CHANNELS:
+                leg = channel_num.replace("Mains_", "")
+                self._attr_name = f"Mains {leg} power"
+            else:
+                self._attr_name = f"Power {self.scale_readable()}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -167,10 +196,12 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             # represent the monitor itself, so those keep the monitor's name.
             if self._channel.channel_num.isdigit():
                 device_name = f"{monitor_name} circuit {self._channel.channel_num}"
-            else:
+            elif self._channel.channel_num in ("1,2,3", *SPLIT_PHASE_MAINS_CHANNELS):
                 device_name = monitor_name
+            else:
+                device_name = f"{monitor_name} {self._channel.channel_num}"
 
-        if self._channel.channel_num == "1,2,3":
+        if self._channel.channel_num in ("1,2,3", *SPLIT_PHASE_MAINS_CHANNELS):
             return DeviceInfo(
                 identifiers={(DOMAIN, f"{self._device.device_gid}-1,2,3")},
                 name=self._device.device_name
@@ -189,7 +220,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
                 (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
             },
             name=device_name,
-            model=determine_circuit_model(self._channel),
+            model=determine_circuit_model(self._channel, self._device),
             model_id=None,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
@@ -258,6 +289,78 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         if self._scale == Scale.MONTH.value:
             return "This Month"
         return self._scale
+
+
+class CurrentVueVoltageSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+    """Representation of a Vue Sensor's split-phase voltage."""
+
+    def __init__(self, coordinator, identifier: str) -> None:
+        """Pass coordinator to CoordinatorEntity."""
+        super().__init__(coordinator)
+        self._id = identifier
+        device_gid: int = coordinator.data[identifier]["device_gid"]
+        channel_num: str = coordinator.data[identifier]["channel_num"]
+        self._device: VueDevice = coordinator.data[identifier]["info"]
+        final_channel: VueDeviceChannel | None = None
+        if self._device is not None:
+            for channel in self._device.channels:
+                if channel.channel_num == channel_num:
+                    final_channel = channel
+                    break
+        if final_channel is None:
+            _LOGGER.warning(
+                "No channel found for device_gid %s and channel_num %s",
+                device_gid,
+                channel_num,
+            )
+            raise RuntimeError(
+                f"No channel found for device_gid {device_gid} and channel_num {channel_num}"
+            )
+        self._channel: VueDeviceChannel = final_channel
+
+        self._attr_has_entity_name = True
+        self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+        self._attr_device_class = SensorDeviceClass.VOLTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 1
+
+        if channel_num in SPLIT_PHASE_MAINS_CHANNELS:
+            leg = channel_num.replace("Mains_", "")
+            self._attr_translation_key = "mains_voltage_minute_average"
+            self._attr_translation_placeholders = {"leg": leg}
+            self._attr_name = f"Mains {leg} voltage minute average"
+        else:
+            self._attr_name = f"{channel_num} voltage minute average"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device info."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._device.device_gid}-1,2,3")},
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the state of the sensor."""
+        if self._id in self.coordinator.data:
+            voltage = self.coordinator.data[self._id].get("voltage")
+            return float(voltage) if voltage is not None else None
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        """Return the Unique ID for the sensor."""
+        device_gid = self._channel.device_gid or self._device.device_gid
+        return f"sensor.emporia_vue.voltage.{device_gid}-{self._channel.channel_num}"
 
 
 class EmporiaUpdateTelemetrySensor(SensorEntity):

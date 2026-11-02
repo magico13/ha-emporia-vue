@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 import logging
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Generic, TypeVar, cast
 
@@ -101,7 +101,7 @@ class TolerantUpdateMethod(Generic[_DataT]):
         except self._recoverable_exceptions as err:
             self._consecutive_failures += 1
             self._total_failures += 1
-            self._last_failure = datetime.now(timezone.utc)
+            self._last_failure = datetime.now(UTC)
             if (
                 self._last_data is _MISSING
                 or self._consecutive_failures > self._tolerated_failures
@@ -129,5 +129,5 @@ class TolerantUpdateMethod(Generic[_DataT]):
             return data
         finally:
             self._last_duration_ms = (monotonic() - started) * 1000
-            self._last_attempt = datetime.now(timezone.utc)
+            self._last_attempt = datetime.now(UTC)
             self._notify_listeners()

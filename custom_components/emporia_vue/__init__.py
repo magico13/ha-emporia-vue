@@ -34,7 +34,7 @@ from pyemvue.device import (
     VueDeviceChannelUsage,
     VueUsageDevice,
 )
-from pyemvue.enums import Scale
+from pyemvue.enums import Scale, Unit
 
 from .cognito_compat import apply_cognito_compat
 from .const import (
@@ -59,6 +59,7 @@ apply_cognito_compat()
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 PLATFORMS: list[str] = ["sensor", "switch", "number"]
+SPLIT_PHASE_MAINS_CHANNELS = ("Mains_A", "Mains_B", "Mains_C")
 SENSITIVE_CONFIG_KEYS = {
     CONF_PASSWORD,
     CONF_ID_TOKEN,
@@ -102,11 +103,30 @@ SYNTHETIC_VIRTUAL_CIRCUITS: dict[str, str] = {
 }
 
 
-def determine_circuit_model(channel: VueDeviceChannel) -> str:
-    """Return a descriptive circuit model for a physical CT or synthetic virtual channel."""
+def determine_circuit_model(
+    channel: VueDeviceChannel, device: VueDevice | None = None
+) -> str:
+    """Return a descriptive circuit model for a physical CT or virtual channel."""
     num = str(channel.channel_num or "")
     if num in SYNTHETIC_VIRTUAL_CIRCUITS:
         return SYNTHETIC_VIRTUAL_CIRCUITS[num]
+
+    # Merged Virtual Circuit constituent branch discovery (virtual channels e.g. Merged_100)
+    if num.startswith("Merged_"):
+        if device and device.channels:
+            member_branches = [
+                ch.channel_num
+                for ch in device.channels
+                if (
+                    ch.parent_channel_id in (num, channel.channel_id)
+                    or ch.parent_channel_num in (num, channel.channel_id)
+                )
+                and ch.channel_num.isdigit()
+            ]
+            if member_branches:
+                sorted_branches = sorted(member_branches, key=int)
+                return f"Merged virtual circuit (Branches {', '.join(sorted_branches)})"
+        return "Merged virtual circuit"
 
     raw_class = (
         getattr(channel, "channel_classification", None)
@@ -248,7 +268,10 @@ def async_setup_device_registry(
         for channel in device.channels:
             if channel.has_data is False:
                 continue
-            if channel.channel_num == "1,2,3":
+            if (
+                channel.channel_num == "1,2,3"
+                or channel.channel_num in SPLIT_PHASE_MAINS_CHANNELS
+            ):
                 continue
 
             circuit_name = channel.name
@@ -269,7 +292,7 @@ def async_setup_device_registry(
                 config_entry_id=entry.entry_id,
                 identifiers={(DOMAIN, f"{device.device_gid}-{channel.channel_num}")},
                 name=circuit_name,
-                model=determine_circuit_model(channel),
+                model=determine_circuit_model(channel, device),
                 model_id=None,
                 sw_version=device.firmware,
                 manufacturer="Emporia",
@@ -978,6 +1001,51 @@ async def async_remove_config_entry_device(
     return True
 
 
+def fetch_device_usages(
+    vue: PyEmVue,
+    gids: list[str],
+    instant: datetime,
+    scale: str,
+    energy_unit: Any = None,
+) -> dict[int, VueUsageDevice]:
+    """Fetch device usages with v1 and legacy fallbacks."""
+    try:
+        scale_val = Scale(scale)
+    except ValueError:
+        scale_val = scale
+
+    if hasattr(vue, "get_device_list_usage_v1"):
+        try:
+            kwargs: dict[str, Any] = {}
+            if energy_unit is not None:
+                kwargs["energy_unit"] = energy_unit
+            res = vue.get_device_list_usage_v1(
+                device_gids=gids,
+                instant=instant,
+                scale=scale_val,
+                **kwargs,
+            )
+            if res:
+                return res
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("get_device_list_usage_v1 failed, trying fallback: %s", err)
+
+    if energy_unit == Unit.VOLTS:
+        return {}
+
+    for method_name in ("get_device_list_usage", "get_devices_usage"):
+        method = getattr(vue, method_name, None)
+        if method:
+            try:
+                res = method(gids, instant, scale)
+                if res:
+                    return res
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("%s failed: %s", method_name, err)
+
+    return {}
+
+
 async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
     """Fetch data from API endpoint."""
     try:
@@ -988,23 +1056,45 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
         for scale in scales:
             utcnow: datetime = datetime.now(UTC)
             usage_dict: dict[int, VueUsageDevice] = await loop.run_in_executor(
-                None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                None, fetch_device_usages, vue, DEVICE_GIDS, utcnow, scale
             )
             if not usage_dict:
                 _LOGGER.warning(
                     "No channels found during update for scale %s. Retrying", scale
                 )
                 usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                    None, fetch_device_usages, vue, DEVICE_GIDS, utcnow, scale
                 )
             if usage_dict:
                 flattened, data_time = flatten_usage_data(usage_dict, scale)
+                flattened_voltage: dict[str, VueDeviceChannelUsage] = {}
+                if scale == Scale.MINUTE.value and hasattr(
+                    vue, "get_device_list_usage_v1"
+                ):
+                    try:
+                        voltage_dict = await loop.run_in_executor(
+                            None,
+                            fetch_device_usages,
+                            vue,
+                            DEVICE_GIDS,
+                            utcnow,
+                            scale,
+                            Unit.VOLTS,
+                        )
+                        if voltage_dict:
+                            flattened_voltage, _ = flatten_usage_data(
+                                voltage_dict, scale
+                            )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("Failed to fetch voltage telemetry: %s", err)
+
                 await parse_flattened_usage_data(
                     flattened,
                     scale,
                     data,
                     utcnow,
                     data_time,
+                    flattened_voltage,
                 )
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
@@ -1042,6 +1132,7 @@ async def parse_flattened_usage_data(
     data: dict[str, Any],
     requested_time: datetime,
     data_time: datetime,
+    flattened_voltage: dict[str, VueDeviceChannelUsage] | None = None,
 ) -> None:
     """Loop through the device list and find the corresponding update data."""
     unused_data: dict[str, VueDeviceChannelUsage] = flattened_data.copy()
@@ -1105,10 +1196,17 @@ async def parse_flattened_usage_data(
                 channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
             )
 
+            channel_voltage: float | None = None
+            if flattened_voltage and identifier in flattened_voltage:
+                v_chan = flattened_voltage[identifier]
+                if v_chan.usage is not None:
+                    channel_voltage = float(v_chan.usage)
+
             data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
                 "usage": fixed_usage,
+                "voltage": channel_voltage,
                 "scale": scale,
                 "info": info,
                 "reset": reset_datetime,
@@ -1130,7 +1228,12 @@ async def parse_flattened_usage_data(
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
             await parse_flattened_usage_data(
-                flattened_data, scale, data, requested_time, data_time
+                flattened_data,
+                scale,
+                data,
+                requested_time,
+                data_time,
+                flattened_voltage,
             )
 
 
@@ -1190,7 +1293,7 @@ def fix_usage_sign(
     is_solar: bool,
     invert_solar: bool,
 ) -> float:
-    """If the channel is not '1,2,3' or 'Balance' we need it to be positive.
+    """If the channel is not '1,2,3', split-phase mains legs, or 'Balance' we need it to be positive.
 
     Solar circuits are up to the user to decide. Positive is recommended for the energy dashboard.
 
@@ -1202,7 +1305,16 @@ def fix_usage_sign(
             return -1 * usage
         return usage
 
-    if usage and not bidirectional and channel_num not in ["1,2,3", "Balance"]:
+    if (
+        usage
+        and not bidirectional
+        and channel_num
+        not in [
+            "1,2,3",
+            "Balance",
+            *SPLIT_PHASE_MAINS_CHANNELS,
+        ]
+    ):
         # With bidirectionality, we need to also check if bidirectional. If yes,
         # we either don't abs, or we flip the sign.
         return abs(usage)
