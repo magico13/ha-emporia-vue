@@ -54,6 +54,13 @@ The integration organizes Emporia devices into their true physical electrical hi
 - **CT Circuit Sub-Device Nesting:** Active branch CT circuits nest under their parent monitor with descriptive circuit model labels (e.g. `50A CT Circuit`, `200A CT Circuit`, `Merged CT Circuit`).
 - **Smart CT & Phase Pruning:** Unpopulated CT ports and unused 3-phase legs (e.g. `Mains C` on split-phase panels) are automatically detected via `has_data` and suppressed from entity creation, preventing empty dummy devices (resolving #379 and #328).
 
+#### Split-Phase & 3-Phase Voltage and Power
+
+The integration provides native line-level voltage and power sensors attached to the parent Vue monitor:
+- **Split-Phase Systems (North America):** Exposes `Mains A voltage`, `Mains B voltage`, `Mains A power`, and `Mains B power`, enabling leg balance monitoring and line-to-line voltage calculations (~120V / ~240V).
+- **3-Phase Systems (International / Commercial):** Exposes `Mains A`, `Mains B`, and `Mains C` voltage and power sensors for 230V/400V wye or delta installations.
+- **Merged Circuits:** User-configured combined circuits (e.g. `Merged_100`) cleanly nest under their parent monitor.
+
 ### API Diagnostics
 
 The integration creates two diagnostic sensors for monitoring Emporia cloud
