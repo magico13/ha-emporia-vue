@@ -65,6 +65,20 @@ OPERATING_STATE_TO_SUBSTATUS: dict[str, str] = {
     "paused_utility": "Paused (utility)",
 }
 
+ENERGY_MANAGEMENT_DISPLAY_NAMES: dict[str, str] = {
+    "EXCESS_SOLAR": "Excess solar",
+    "PEAK_DEMAND": "Peak demand",
+    "POWER_SMART": "PowerSmart",
+    "LOAD_SHARING": "Load sharing",
+}
+
+
+def normalize_energy_management_program(program: Any) -> str:
+    """Normalize raw energy management program name to Sentence case display string."""
+    cleaned = str(program).strip().upper() if program is not None else ""
+    return ENERGY_MANAGEMENT_DISPLAY_NAMES.get(cleaned, str(program))
+
+
 OPERATING_STATE_ICONS: dict[str, str] = {
     "fault": "mdi:alert-circle",
     "offline": "mdi:lan-disconnect",
@@ -116,12 +130,14 @@ def resolve_charger_load_gid(
     charger_data: ChargerDevice | None = None,
     fallback_gid: int | str = 0,
 ) -> int:
-    """Return the canonical controllable load GID for an EVSE device."""
+    """Return the canonical controllable load GID for an EVSE or outlet device."""
     ev_charger = getattr(device, "ev_charger", None)
+    outlet_obj = getattr(device, "outlet", None)
     gid = (
         getattr(device, "load_gid", None)
         or getattr(charger_data, "load_gid", None)
         or getattr(ev_charger, "load_gid", None)
+        or getattr(outlet_obj, "load_gid", None)
         or fallback_gid
     )
     try:
@@ -483,6 +499,15 @@ class EmporiaLocationEntityMixin:
     def _site_map(self, value: dict[int, Any] | None) -> None:
         self._explicit_site_map = value
 
+    def _resolve_location_attribute(self) -> str | None:
+        """Return the mapped site display name for this entity's device."""
+        site_gid = getattr(self._device, "site_gid", None)
+        return (
+            self._site_map.get(site_gid)
+            if site_gid is not None and self._site_map
+            else None
+        )
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return device and location state attributes."""
@@ -490,12 +515,7 @@ class EmporiaLocationEntityMixin:
             attrs = dict(super().extra_state_attributes or {})
         except (AttributeError, TypeError):
             attrs = {}
-        site_gid = getattr(self._device, "site_gid", None)
-        attrs["location"] = (
-            self._site_map.get(site_gid)
-            if site_gid is not None and self._site_map
-            else None
-        )
+        attrs["location"] = self._resolve_location_attribute()
         return attrs
 
 

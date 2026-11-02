@@ -68,6 +68,8 @@ Emporia EV Chargers (EVSE) feature modernized V1 controls and live session telem
 - **Session Energy:** Dedicated `Session energy` sensor (`sensor.<charger>_session_energy`) tracking total kWh delivered during the current or most recent charge cycle.
 - **Session Cost & Plug-in Time:** Dedicated `Session cost` (`sensor.<charger>_session_cost`) and `Plug-in time` (`sensor.<charger>_plug_in_time`) sensors.
 - **Session Attributes:** Enriched attributes on `sensor.<charger>_charger_status` reporting active charging duration and substatus.
+- **Full Power Override:** A one-tap `Charge at full power` button entity (`button.<charger>_charge_at_full_power`) that immediately overrides solar or scheduled throttling to charge at maximum available current.
+- **Excess Solar Management:** For sites equipped with solar CTs, configuration switch entities under `EntityCategory.CONFIG` dynamically appear on eligible managing Vue energy monitors to enroll EV chargers and smart plugs in surplus solar charging.
 
 ### API Diagnostics
 
