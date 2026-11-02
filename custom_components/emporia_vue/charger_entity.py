@@ -65,6 +65,20 @@ OPERATING_STATE_TO_SUBSTATUS: dict[str, str] = {
     "paused_utility": "Paused (utility)",
 }
 
+ENERGY_MANAGEMENT_DISPLAY_NAMES: dict[str, str] = {
+    "EXCESS_SOLAR": "Excess solar",
+    "PEAK_DEMAND": "Peak demand",
+    "POWER_SMART": "PowerSmart",
+    "LOAD_SHARING": "Load sharing",
+}
+
+
+def normalize_energy_management_program(program: Any) -> str:
+    """Normalize raw energy management program name to Sentence case display string."""
+    cleaned = str(program).strip().upper() if program is not None else ""
+    return ENERGY_MANAGEMENT_DISPLAY_NAMES.get(cleaned, str(program))
+
+
 OPERATING_STATE_ICONS: dict[str, str] = {
     "fault": "mdi:alert-circle",
     "offline": "mdi:lan-disconnect",

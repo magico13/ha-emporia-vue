@@ -58,7 +58,7 @@ apply_cognito_compat()
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "switch", "number"]
+PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]
 SPLIT_PHASE_MAINS_CHANNELS = ("Mains_A", "Mains_B", "Mains_C")
 SENSITIVE_CONFIG_KEYS = {
     CONF_PASSWORD,
@@ -849,11 +849,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vue.get_devices_status
                 )
 
+                excess_monitors = None
+                excess_solar_by_device_id: dict[str, Any] = {}
+                if (outlets or chargers) and hasattr(
+                    vue, "get_excess_generation_monitors"
+                ):
+                    try:
+                        excess_monitors = await hass.async_add_executor_job(
+                            vue.get_excess_generation_monitors
+                        )
+                        if excess_monitors and excess_monitors.monitors:
+                            for mon in excess_monitors.monitors:
+                                try:
+                                    em_eg = await hass.async_add_executor_job(
+                                        vue.get_excess_generation, mon.device_id
+                                    )
+                                    if em_eg:
+                                        excess_solar_by_device_id[mon.device_id] = em_eg
+                                except Exception as err:  # noqa: BLE001
+                                    _LOGGER.debug(
+                                        "Failed to fetch excess generation for monitor %s: %s",
+                                        mon.device_id,
+                                        err,
+                                    )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "Failed to fetch excess generation monitors: %s",
+                            err,
+                        )
+
+                data["excess_monitors"] = excess_monitors
+                data["excess_solar_by_device_id"] = excess_solar_by_device_id
+
                 if outlets:
                     for outlet in outlets:
+                        outlet.excess_monitors = excess_monitors
+                        outlet.excess_solar_by_device_id = excess_solar_by_device_id
                         data[str(outlet.device_gid)] = outlet
                 if chargers:
                     for charger in chargers:
+                        charger.excess_monitors = excess_monitors
+                        charger.excess_solar_by_device_id = excess_solar_by_device_id
                         charger.evse_control = None
                         if hasattr(vue, "get_evse_control"):
                             dev_id = (

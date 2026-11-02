@@ -13,6 +13,9 @@ from pyemvue.device import (
     VueDevice,
 )
 
+from custom_components.emporia_vue.button import (
+    EmporiaChargerFullPowerOverrideButton,
+)
 from custom_components.emporia_vue.charger_entity import (
     evaluate_charger_substatus,
     evaluate_charger_switch_available,
@@ -23,7 +26,9 @@ from custom_components.emporia_vue.charger_entity import (
     resolve_excess_solar_participation,
 )
 from custom_components.emporia_vue.number import EmporiaChargerCurrentNumber
-from custom_components.emporia_vue.sensor import EmporiaChargerStatusSensor
+from custom_components.emporia_vue.sensor import (
+    EmporiaChargerStatusSensor,
+)
 from custom_components.emporia_vue.switch import EmporiaChargerSwitch
 
 
@@ -229,9 +234,13 @@ def test_evse_master_truth_matrix(
         coord.data["excess_solar_by_device_id"] = {"1001": mock_eg}
 
     # 1. Switch
-    switch = EmporiaChargerSwitch(coord, MagicMock(), vue_dev)
+    switch = EmporiaChargerSwitch(
+        coord, MagicMock(), vue_dev, device_information={1003: vue_dev}
+    )
     assert switch.available is exp_switch_avail
     assert switch.is_on is exp_switch_is_on
+    assert "energy_managements_configured" not in switch.extra_state_attributes
+    assert "excess_solar_enabled" not in switch.extra_state_attributes
 
     # Legacy status string mapping on switch for backward compatibility
     if state_id == "S02_offline":
@@ -246,7 +255,11 @@ def test_evse_master_truth_matrix(
     number = EmporiaChargerCurrentNumber(coord, MagicMock(), vue_dev)
     assert number.available is exp_num_avail
 
-    # 3. Status Sensor
+    # 3. Override Button
+    button = EmporiaChargerFullPowerOverrideButton(coord, MagicMock(), vue_dev)
+    assert button.available is exp_btn_avail
+
+    # 4. Status Sensor
     status_sensor = EmporiaChargerStatusSensor(
         coord, vue_dev, device_information={1003: vue_dev}
     )

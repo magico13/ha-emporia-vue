@@ -78,6 +78,11 @@
     }
   },
   "entity": {
+    "button": {
+      "charge_at_full_power": {
+        "name": "Charge at full power"
+      }
+    },
     "number": {
       "charge_current_limit": {
         "name": "Current limit"
@@ -104,6 +109,16 @@
       "charging_power": {
         "name": "Charging power"
       }
+    },
+    "switch": {
+      "excess_solar_load": {
+        "name": "Excess solar {load}"
+      }
+    }
+  },
+  "exceptions": {
+    "load_already_managed": {
+      "message": "{load} is already managed by {vue}. Turn off excess solar for {load} on {vue} first."
     }
   },
   "services": {
