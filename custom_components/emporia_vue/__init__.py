@@ -36,6 +36,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .channel_names import channel_display_name, merge_device_information, refresh_channel_names
 from .cognito_compat import apply_cognito_compat
 from .const import (
     AUTH_METHOD,
@@ -84,6 +85,8 @@ LAST_MONTH_INTEGRATED_MINUTE: dict[str, datetime] = {}
 INVERT_SOLAR: bool = True
 
 TOLERATED_UPDATE_FAILURES = 2
+DEVICE_INFORMATION_REFRESH_INTERVAL = timedelta(minutes=15)
+DEVICE_INFORMATION_LAST_REFRESH: datetime | None = None
 
 
 def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
@@ -148,11 +151,29 @@ async def async_login_vue(
     )
 
 
+async def async_update_registered_channel_names(hass: HomeAssistant) -> None:
+    """Refresh automatically managed HA device names from Emporia app labels."""
+    from homeassistant.helpers import device_registry as dr
+
+    registry = dr.async_get(hass)
+    for gid, device_info in DEVICE_INFORMATION.items():
+        for channel in device_info.channels:
+            identifiers = {(DOMAIN, f"{gid}-{channel.channel_num}")}
+            registered = registry.async_get_device(identifiers, set())
+            if registered is None or registered.name_by_user is not None:
+                continue
+            name = channel_display_name(device_info, channel)
+            if registered.name != name:
+                registry.async_update_device(registered.id, name=name)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
+    global DEVICE_INFORMATION_LAST_REFRESH
+    DEVICE_INFORMATION_LAST_REFRESH = None
     DEVICE_GIDS = []
     DEVICE_INFORMATION = {}
     LAST_DAY_INTEGRATED_MINUTE.clear()
@@ -208,13 +229,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     try:
         devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
-        for device in devices:
-            if str(device.device_gid) not in DEVICE_GIDS:
-                DEVICE_GIDS.append(str(device.device_gid))
-                _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
-                DEVICE_INFORMATION[device.device_gid] = device
-            else:
-                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+        DEVICE_INFORMATION.update(merge_device_information(devices))
+        DEVICE_GIDS.extend(str(gid) for gid in DEVICE_INFORMATION)
+        DEVICE_INFORMATION_LAST_REFRESH = datetime.now(UTC)
 
         total_channels = 0
         for device in DEVICE_INFORMATION.values():
@@ -225,12 +242,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             total_channels,
         )
 
+        name_refresh_lock = asyncio.Lock()
+
+        async def async_refresh_names() -> None:
+            """Refresh labels independently of the enabled energy sensor scales."""
+            global DEVICE_INFORMATION_LAST_REFRESH
+            async with name_refresh_lock:
+                now = datetime.now(UTC)
+                if (
+                    DEVICE_INFORMATION_LAST_REFRESH is not None
+                    and now - DEVICE_INFORMATION_LAST_REFRESH
+                    < DEVICE_INFORMATION_REFRESH_INTERVAL
+                ):
+                    return
+                # Rate-limit failures as well as successful refreshes.
+                DEVICE_INFORMATION_LAST_REFRESH = now
+                try:
+                    devices = await loop.run_in_executor(None, vue.get_devices)
+                    refresh_channel_names(DEVICE_INFORMATION, devices)
+                    await async_update_registered_channel_names(hass)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Could not refresh Emporia channel names; telemetry continues",
+                        exc_info=True,
+                    )
+
         async def async_update_data_1min() -> dict:
             """Fetch data from API endpoint at a 1 minute interval.
 
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
+            await async_refresh_names()
             data: dict = await update_sensors(vue, [Scale.MINUTE.value])
             # store this, then have the daily sensors pull from it and integrate
             # then the daily can "true up" hourly (or more frequent) in case it's incorrect
@@ -240,6 +283,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return data
 
         async def async_update_day_sensors() -> dict:
+            await async_refresh_names()
             global LAST_DAY_UPDATE
             global LAST_DAY_DATA
             now: datetime = datetime.now(UTC)
@@ -279,6 +323,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return LAST_DAY_DATA
 
         async def async_update_month_sensors() -> dict:
+            await async_refresh_names()
             global LAST_MONTH_UPDATE
             global LAST_MONTH_DATA
             now: datetime = datetime.now(UTC)
