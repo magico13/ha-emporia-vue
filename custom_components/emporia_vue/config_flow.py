@@ -149,7 +149,6 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     VERSION = 1
     DOMAIN = DOMAIN
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
     _oauth_provider: str | None = None
 
     @property
