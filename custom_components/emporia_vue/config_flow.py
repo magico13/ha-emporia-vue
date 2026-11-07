@@ -1,19 +1,18 @@
 """Config flow for Emporia Vue integration."""
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from functools import partial
-import logging
 from typing import Any
 
-from pyemvue import PyEmVue
-from pyemvue.auth import CLIENT_ID
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-
 from homeassistant import config_entries, exceptions
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
+from pyemvue import PyEmVue
+from pyemvue.auth import CLIENT_ID
 
 from .const import (
     AUTH_METHOD,
