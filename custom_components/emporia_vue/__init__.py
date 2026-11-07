@@ -13,7 +13,7 @@ import dateutil.relativedelta
 import dateutil.tz
 import requests
 import voluptuous as vol
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
@@ -24,12 +24,14 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
+    EvseControlStatus,
     OutletDevice,
     VueDevice,
     VueDeviceChannel,
@@ -37,6 +39,12 @@ from pyemvue.device import (
     VueUsageDevice,
 )
 from pyemvue.enums import Scale, Unit
+
+try:
+    from pyemvue.stream import DeviceStatusDelta, EmporiaStreamClient
+except ImportError:
+    DeviceStatusDelta = None  # type: ignore[assignment, misc]
+    EmporiaStreamClient = None  # type: ignore[assignment, misc]
 
 from .charger_entity import resolve_charger_device_id
 from .cognito_compat import apply_cognito_compat
@@ -921,7 +929,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Check if any devices have outlets or chargers
         has_controllable_devices = any(
-            device.outlet or device.ev_charger for device in DEVICE_INFORMATION.values()
+            bool(
+                getattr(device, "outlet", None)
+                or getattr(device, "evse", None)
+                or getattr(device, "ev_charger", None)
+            )
+            for device in DEVICE_INFORMATION.values()
         )
 
         async def async_update_device_status() -> dict[str, Any]:
@@ -1013,6 +1026,286 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 update_interval=timedelta(minutes=1),
             )
             await coordinator_device_status.async_config_entry_first_refresh()
+
+        stream_client = None
+        stream_task = None
+        if EmporiaStreamClient is not None and DEVICE_INFORMATION:
+            try:
+                session = async_get_clientsession(hass)
+                has_connected_once = False
+
+                def _on_stream_connected() -> None:
+                    """Adjust polling interval when stream is connected, and heal on reconnect."""
+                    nonlocal has_connected_once
+                    if coordinator_device_status is None:
+                        has_connected_once = True
+                        return
+                    has_chargers = any(
+                        bool(
+                            getattr(dev, "evse", None)
+                            or getattr(dev, "ev_charger", None)
+                        )
+                        for dev in DEVICE_INFORMATION.values()
+                    )
+                    new_interval = (
+                        timedelta(minutes=1) if has_chargers else timedelta(minutes=10)
+                    )
+                    prev_interval = coordinator_device_status.update_interval
+                    if has_chargers:
+                        _LOGGER.debug(
+                            "Emporia SSE stream connected; retaining 1-minute status polling for EVSE session telemetry"
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "Emporia SSE stream connected; relaxing status polling to 10 minutes"
+                        )
+                    coordinator_device_status.update_interval = new_interval
+                    if has_connected_once:
+                        _LOGGER.debug(
+                            "Emporia SSE stream reconnected; requesting immediate status refresh"
+                        )
+                        hass.async_create_task(
+                            coordinator_device_status.async_request_refresh()
+                        )
+                    elif (
+                        prev_interval != new_interval
+                        and coordinator_device_status.data is not None
+                    ):
+                        coordinator_device_status.async_set_updated_data(
+                            coordinator_device_status.data
+                        )
+                    has_connected_once = True
+
+                def _on_stream_disconnected() -> None:
+                    """Revert polling interval to 1-minute fallback when stream drops."""
+                    _LOGGER.warning(
+                        "Emporia SSE stream disconnected%s",
+                        "; reverting status polling to 1-minute fallback"
+                        if coordinator_device_status is not None
+                        else "",
+                    )
+                    if coordinator_device_status is None:
+                        return
+                    prev_interval = coordinator_device_status.update_interval
+                    coordinator_device_status.update_interval = timedelta(minutes=1)
+                    if (
+                        prev_interval is not None
+                        and prev_interval > timedelta(minutes=1)
+                        and not hass.is_stopping
+                        and entry.state is ConfigEntryState.LOADED
+                    ):
+                        hass.async_create_task(
+                            coordinator_device_status.async_request_refresh()
+                        )
+
+                stream_client = EmporiaStreamClient(
+                    auth=vue,
+                    session=session,
+                    on_connect=_on_stream_connected,
+                    on_disconnect=_on_stream_disconnected,
+                )
+
+                async def _async_handle_stream_delta(delta: DeviceStatusDelta) -> None:
+                    """Handle incoming SSE status delta and update coordinator and registry."""
+                    if coordinator_device_status is not None:
+                        if not coordinator_device_status.data:
+                            coordinator_device_status.data = {}
+                        current_data = dict(coordinator_device_status.data)
+                        chargers_to_refresh: dict[
+                            int, tuple[ChargerDevice, Any, Any]
+                        ] = {}
+                        processed_gids: set[int] = set()
+
+                        # Update EVSE chargers
+                        for charger in delta.evses:
+                            gid_key = str(charger.device_gid)
+                            processed_gids.add(charger.device_gid)
+                            extra = (
+                                delta
+                                if delta.device_gid == charger.device_gid
+                                else None
+                            )
+                            if gid_key in current_data and isinstance(
+                                current_data[gid_key], ChargerDevice
+                            ):
+                                dev = current_data[gid_key]
+                                status_changed = _apply_evse_delta_fields(
+                                    dev, charger, extra_delta=extra
+                                )
+                            else:
+                                dev = charger
+                                status_changed = _apply_evse_delta_fields(
+                                    dev, charger, extra_delta=extra
+                                )
+                                current_data[gid_key] = dev
+                            if status_changed or delta.charging_rate_amps is None:
+                                chargers_to_refresh[dev.device_gid] = (
+                                    dev,
+                                    charger,
+                                    extra,
+                                )
+
+                        # Update Outlets
+                        for outlet in delta.outlets:
+                            gid_key = str(outlet.device_gid)
+                            processed_gids.add(outlet.device_gid)
+                            if gid_key in current_data and isinstance(
+                                current_data[gid_key], OutletDevice
+                            ):
+                                if outlet.outlet_on is not None:
+                                    current_data[gid_key].outlet_on = outlet.outlet_on
+                            else:
+                                current_data[gid_key] = outlet
+
+                        # Update single EVSE or outlet delta attributes when not in list envelopes
+                        if (
+                            delta.device_gid is not None
+                            and delta.device_gid not in processed_gids
+                        ):
+                            gid_key = str(delta.device_gid)
+                            if gid_key in current_data:
+                                dev = current_data[gid_key]
+                                if isinstance(dev, ChargerDevice):
+                                    status_changed = _apply_evse_delta_fields(
+                                        dev, delta
+                                    )
+                                    if (
+                                        status_changed
+                                        or delta.charging_rate_amps is None
+                                    ):
+                                        chargers_to_refresh[dev.device_gid] = (
+                                            dev,
+                                            delta,
+                                            None,
+                                        )
+                                elif (
+                                    isinstance(dev, OutletDevice)
+                                    and delta.outlet_on is not None
+                                ):
+                                    dev.outlet_on = delta.outlet_on
+
+                        # Fetch live /evses/control telemetry concurrently when delta omits it or status changed
+                        if hasattr(vue, "get_evse_control") and chargers_to_refresh:
+
+                            async def _refresh_charger_control(
+                                charger_dev: ChargerDevice,
+                                source_obj: Any,
+                                extra_obj: Any,
+                            ) -> None:
+                                dev_id = resolve_charger_device_id(
+                                    DEVICE_INFORMATION.get(charger_dev.device_gid),
+                                    charger_dev,
+                                    charger_dev.device_gid,
+                                )
+                                try:
+                                    ctrl = await hass.async_add_executor_job(
+                                        vue.get_evse_control, dev_id
+                                    )
+                                    if ctrl is not None:
+                                        _overlay_evse_control_from_source(
+                                            ctrl,
+                                            source_obj,
+                                            extra_obj,
+                                            fallback_status=getattr(
+                                                charger_dev, "status", None
+                                            ),
+                                        )
+                                        charger_dev.evse_control = ctrl
+                                except Exception as err:  # noqa: BLE001
+                                    _LOGGER.debug(
+                                        "Failed to refresh EVSE control telemetry for %s: %s",
+                                        dev_id,
+                                        err,
+                                    )
+
+                            await asyncio.gather(
+                                *(
+                                    _refresh_charger_control(dev, src, extra_src)
+                                    for dev, src, extra_src in chargers_to_refresh.values()
+                                )
+                            )
+
+                        # Update device connectivity
+                        for item in delta.devices_connected:
+                            gid_str = str(item.get("device_gid") or "")
+                            if gid_str and gid_str in current_data:
+                                dev = current_data[gid_str]
+                                if "connected" in item and hasattr(dev, "connected"):
+                                    dev.connected = item["connected"]
+
+                    new_name = delta.get("device_name") or delta.get("deviceName")
+                    gid_int: int | None = None
+                    if delta.device_gid is not None:
+                        try:
+                            gid_int = int(delta.device_gid)
+                        except (ValueError, TypeError):
+                            gid_int = None
+                    if (
+                        isinstance(new_name, str)
+                        and new_name
+                        and gid_int is not None
+                        and gid_int in DEVICE_INFORMATION
+                    ):
+                        DEVICE_INFORMATION[gid_int].device_name = new_name
+                        async_setup_device_registry(hass, entry, DEVICE_INFORMATION)
+
+                    if coordinator_device_status is not None:
+                        # Update coordinator and notify listeners
+                        coordinator_device_status.async_set_updated_data(current_data)
+
+                async def _async_run_sse_stream() -> None:
+                    """Background stream listener loop."""
+                    _LOGGER.debug("Starting Emporia SSE device status push stream...")
+                    try:
+                        async for delta in stream_client.listen():
+                            _LOGGER.debug(
+                                "Received SSE push event (%s) for gid=%s",
+                                delta.event_type,
+                                delta.device_gid,
+                            )
+                            try:
+                                await _async_handle_stream_delta(delta)
+                            except Exception as delta_err:  # noqa: BLE001
+                                _LOGGER.warning(
+                                    "Error handling Emporia SSE status delta: %s",
+                                    delta_err,
+                                )
+                    except asyncio.CancelledError:
+                        _LOGGER.debug("Emporia SSE stream background task cancelled.")
+                        await stream_client.close()
+                        raise
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "Emporia SSE stream background task encountered error: %s",
+                            err,
+                        )
+                    finally:
+                        if coordinator_device_status is not None:
+                            prev_interval = coordinator_device_status.update_interval
+                            coordinator_device_status.update_interval = timedelta(
+                                minutes=1
+                            )
+                            if (
+                                prev_interval is not None
+                                and prev_interval > timedelta(minutes=1)
+                                and not hass.is_stopping
+                                and entry.state is ConfigEntryState.LOADED
+                            ):
+                                hass.async_create_task(
+                                    coordinator_device_status.async_request_refresh()
+                                )
+                        await stream_client.close()
+
+                if hasattr(entry, "async_create_background_task"):
+                    stream_task = entry.async_create_background_task(
+                        hass, _async_run_sse_stream(), "emporia_vue_sse_stream"
+                    )
+                else:
+                    stream_task = hass.async_create_background_task(
+                        _async_run_sse_stream(), "emporia_vue_sse_stream"
+                    )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Could not initialize Emporia SSE push stream: %s", err)
 
         # Setup custom services
         async def handle_set_charger_current(call) -> None:
@@ -1147,6 +1440,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "device_information": DEVICE_INFORMATION,
         "retry_update_methods": retry_update_methods,
         "site_map": site_map,
+        "stream_client": stream_client,
+        "stream_task": stream_task,
     }
 
     try:
@@ -1212,6 +1507,123 @@ def _populate_site_map_and_assign_devices(
             dev.site_gid = matched_sgid
 
 
+_STALE_PAUSED_SUBTEXTS = frozenset(
+    {
+        "MANUALLY_STOPPED",
+        "VEHICLE_STOPPED",
+        "SCHEDULE_STOPPED",
+        "TOU_STOPPED",
+        "UTILITY_STOPPED",
+        "PEAK_DEMAND_STOPPED",
+    }
+)
+_SSE_EVSE_TELEMETRY_FIELDS = (
+    "charging_rate_kw",
+    "charging_rate_amps",
+    "offered_amps",
+    "energy_delivered",
+    "active_charging_minutes",
+    "cost",
+    "plug_in",
+)
+
+
+def _overlay_evse_control_from_source(
+    ctrl: EvseControlStatus,
+    source: Any,
+    extra_delta: Any = None,
+    *,
+    fallback_status: str | None = None,
+) -> None:
+    """Apply explicit SSE telemetry and status fields onto an EvseControlStatus."""
+    src_status = getattr(source, "status", None) or getattr(extra_delta, "status", None)
+    effective_status = src_status or fallback_status
+    if src_status:
+        ctrl.charger_status = src_status
+    elif effective_status and not getattr(ctrl, "charger_status", None):
+        ctrl.charger_status = effective_status
+
+    if effective_status == "CHARGING":
+        ctrl.session_active = True
+    elif effective_status in ("DISCONNECTED_OFF", "DISCONNECTED_ON"):
+        ctrl.session_active = False
+
+    if effective_status in (
+        "CHARGING",
+        "CONNECTED_ON",
+        "DISCONNECTED_OFF",
+        "DISCONNECTED_ON",
+    ):
+        subtext = getattr(ctrl, "subtext_type", None)
+        if (
+            subtext in _STALE_PAUSED_SUBTEXTS
+            or (
+                effective_status in ("CHARGING", "DISCONNECTED_OFF", "DISCONNECTED_ON")
+                and subtext == "WAITING_FOR_SOLAR"
+            )
+            or (
+                effective_status in ("DISCONNECTED_OFF", "DISCONNECTED_ON")
+                and subtext in ("EXCESS_SOLAR_PAUSED", "PEAK_DEMAND_PAUSED")
+            )
+        ):
+            ctrl.subtext_type = None
+
+    for candidate in (source, extra_delta):
+        if candidate is None:
+            continue
+        if getattr(candidate, "vehicle_charging", None) is True:
+            ctrl.session_active = True
+        rate = getattr(candidate, "charging_rate", None)
+        if rate is not None and (not isinstance(candidate, ChargerDevice) or rate > 0):
+            ctrl.offered_amps = rate
+        for field in _SSE_EVSE_TELEMETRY_FIELDS:
+            val = getattr(candidate, field, None)
+            if val is not None:
+                setattr(ctrl, field, val)
+
+
+def _apply_evse_delta_fields(
+    dev: ChargerDevice,
+    source: Any,
+    extra_delta: Any = None,
+) -> bool:
+    """Apply EVSE fields from a stream ChargerDevice or DeviceStatusDelta.
+
+    Return True when charger status transitioned to a new non-empty value.
+    """
+    prev_status = getattr(dev, "status", None)
+    new_status = getattr(source, "status", None) or getattr(extra_delta, "status", None)
+    if new_status:
+        dev.status = new_status
+
+    for candidate in (source, extra_delta):
+        if candidate is None:
+            continue
+        for attr in ("charger_on", "vehicle_connected", "vehicle_charging"):
+            val = getattr(candidate, attr, None)
+            if val is not None:
+                setattr(dev, attr, val)
+        for text_attr in ("fault_text", "message"):
+            text_val = getattr(candidate, text_attr, None)
+            if text_val:
+                setattr(dev, text_attr, text_val)
+        rate = getattr(candidate, "charging_rate", None)
+        if rate is not None and (not isinstance(candidate, ChargerDevice) or rate > 0):
+            dev.charging_rate = rate
+
+    if getattr(dev, "evse_control", None) is None:
+        dev.evse_control = EvseControlStatus(
+            device_id=dev.device_id or str(dev.device_gid)
+        )
+    _overlay_evse_control_from_source(
+        dev.evse_control,
+        source,
+        extra_delta,
+        fallback_status=getattr(dev, "status", None),
+    )
+    return bool(new_status and new_status != prev_status)
+
+
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -1228,7 +1640,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id, {})
+        for coord_key in (
+            "coordinator_1min",
+            "coordinator_1mon",
+            "coordinator_day_sensor",
+            "coordinator_device_status",
+        ):
+            coordinator = entry_data.get(coord_key)
+            if coordinator and hasattr(coordinator, "async_shutdown"):
+                await coordinator.async_shutdown()
+
+        stream_client = entry_data.get("stream_client")
+        if stream_client:
+            await stream_client.close()
+        stream_task = entry_data.get("stream_task")
+        if stream_task and not stream_task.done():
+            stream_task.cancel()
 
     return unload_ok
 
