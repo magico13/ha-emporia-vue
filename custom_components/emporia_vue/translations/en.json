@@ -72,10 +72,15 @@
             }
         }
     },
+    "device": {
+        "circuit": {
+            "name": "{device_name} circuit {channel_number}"
+        }
+    },
     "entity": {
         "number": {
             "charge_current_limit": {
-                "name": "Current Limit"
+                "name": "Current limit"
             }
         },
         "sensor": {

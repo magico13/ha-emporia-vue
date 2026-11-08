@@ -2,14 +2,13 @@
 
 from typing import Any
 
-from pyemvue import pyemvue
-from pyemvue.device import ChargerDevice, VueDevice
-
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from pyemvue import pyemvue
+from pyemvue.device import ChargerDevice, VueDevice
 
 from .const import DOMAIN
 
@@ -75,8 +74,13 @@ class EmporiaChargerEntity(CoordinatorEntity):
         """Return the device information."""
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
-            name=self._device.device_name,
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
             model=self._device.model,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
         )

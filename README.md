@@ -45,6 +45,15 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 5. In the UI that opens, enter the email and password used for the Emporia App. If your account uses Google/Apple, see the [Google/Apple Accounts](#googleapple-accounts) section below.
 6. Done! You should now have a sensor for each "channel".
 
+### Features & Telemetry
+
+#### Device Hierarchy & Smart CT Pruning
+
+The integration organizes Emporia devices into their true physical electrical hierarchy:
+- **Two-Pass Hardware Hierarchy:** Child sub-panels (e.g. Garage Vue) and EV chargers automatically nest under their upstream electrical panel via Home Assistant's `via_device` relationship.
+- **CT Circuit Sub-Device Nesting:** Active branch CT circuits nest under their parent monitor with descriptive circuit model labels (e.g. `50A CT Circuit`, `200A CT Circuit`, `Merged CT Circuit`).
+- **Smart CT & Phase Pruning:** Unpopulated CT ports and unused 3-phase legs (e.g. `Mains C` on split-phase panels) are automatically detected via `has_data` and suppressed from entity creation, preventing empty dummy devices (resolving #379 and #328).
+
 ### API Diagnostics
 
 The integration creates two diagnostic sensors for monitoring Emporia cloud
