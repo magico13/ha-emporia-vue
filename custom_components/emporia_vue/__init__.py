@@ -2,15 +2,29 @@
 
 import asyncio
 import calendar
+import logging
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta, tzinfo
 from functools import partial
-import logging
-import re
 from typing import Any
 
 import dateutil.relativedelta
 import dateutil.tz
+import requests
+import voluptuous as vol
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.core import HomeAssistant, State
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
@@ -21,20 +35,6 @@ from pyemvue.device import (
     VueUsageDevice,
 )
 from pyemvue.enums import Scale
-import requests
-import voluptuous as vol
-
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, State
-from homeassistant.exceptions import (
-    ConfigEntryAuthFailed,
-    ConfigEntryNotReady,
-    HomeAssistantError,
-)
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .cognito_compat import apply_cognito_compat
 from .const import (
@@ -92,6 +92,222 @@ def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
         key: "***" if key in SENSITIVE_CONFIG_KEYS else value
         for key, value in data.items()
     }
+
+
+SYNTHETIC_VIRTUAL_CIRCUITS: dict[str, str] = {
+    "Balance": "Virtual circuit (Balance)",
+    "TotalUsage": "Virtual circuit (Total usage)",
+    "MainsFromGrid": "Virtual circuit (Mains from grid)",
+    "MainsToGrid": "Virtual circuit (Mains to grid)",
+}
+
+
+def determine_circuit_model(channel: VueDeviceChannel) -> str:
+    """Return a descriptive circuit model for a physical CT or synthetic virtual channel."""
+    num = str(channel.channel_num or "")
+    if num in SYNTHETIC_VIRTUAL_CIRCUITS:
+        return SYNTHETIC_VIRTUAL_CIRCUITS[num]
+
+    raw_class = (
+        getattr(channel, "channel_classification", None)
+        or getattr(channel, "type", None)
+        or ""
+    )
+    classification = str(raw_class).strip().lower()
+
+    if "main" in classification or num in ("1,2,3", "Mains_A", "Mains_B", "Mains_C"):
+        return "Main CT circuit"
+    if (
+        "200" in classification
+        or "two_hundred" in classification
+        or "twohundred" in classification
+    ):
+        return "200A CT circuit"
+    if "merged" in classification:
+        return (
+            f"Merged CT circuit (Branch {num})" if num.isdigit() else "Merged CT circuit"
+        )
+
+    if num.isdigit():
+        return f"50A CT circuit (Branch {num})"
+
+    return "50A CT circuit"
+
+
+def get_device_depth(d: VueDevice, device_info_map: dict[int, VueDevice]) -> int:
+    """Compute nesting depth of a device so parent devices are registered first."""
+    depth = 0
+    curr = d
+    visited = {curr.device_gid}
+    parent_gid = curr.parent_device_gid
+    while parent_gid and parent_gid != 0 and parent_gid in device_info_map:
+        if parent_gid in visited:
+            break
+        visited.add(parent_gid)
+        depth += 1
+        curr = device_info_map[parent_gid]
+        parent_gid = curr.parent_device_gid
+    return depth
+
+
+def async_setup_device_registry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_info_map: dict[int, VueDevice],
+) -> None:
+    """Register physical devices and CT circuit sub-devices in device registry."""
+    dev_reg = dr.async_get(hass)
+
+    def _lookup_device_entry(ident: tuple[str, str]) -> dr.DeviceEntry | None:
+        """Lookup device entry by identifier respecting Core 2026+ standards."""
+        if hasattr(dev_reg, "async_get_device_by_identifier"):
+            return dev_reg.async_get_device_by_identifier(ident, entry.entry_id)
+        return dev_reg.async_get_device(identifiers={ident})
+
+    # Pass 1: Hardware Physical Devices
+    # Sort topologically so root monitors are registered before child monitors/EVSEs
+    sorted_physical_devices = sorted(
+        device_info_map.values(),
+        key=lambda d: get_device_depth(d, device_info_map),
+    )
+    for device in sorted_physical_devices:
+        parent_gid = device.parent_device_gid
+        parent_entry = (
+            _lookup_device_entry((DOMAIN, f"{parent_gid}-1,2,3"))
+            if parent_gid and parent_gid != 0 and parent_gid != device.device_gid
+            else None
+        )
+        dev_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{device.device_gid}-1,2,3")},
+            name=device.device_name,
+            model=device.model,
+            sw_version=device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(device.manufacturer_id)
+            if device.manufacturer_id
+            else None,
+            via_device_id=parent_entry.id if parent_entry else None,
+        )
+
+    # Pass 2: CT Circuit Sub-Devices
+    for device in device_info_map.values():
+        if not device.channels:
+            continue
+        parent_entry = _lookup_device_entry((DOMAIN, f"{device.device_gid}-1,2,3"))
+        for channel in device.channels:
+            if channel.has_data is False:
+                continue
+            if channel.channel_num == "1,2,3":
+                continue
+
+            circuit_name = channel.name
+            translation_key = None
+            translation_placeholders = None
+            if not circuit_name:
+                if channel.channel_num.isdigit():
+                    circuit_name = f"{device.device_name} circuit {channel.channel_num}"
+                    translation_key = "circuit"
+                    translation_placeholders = {
+                        "device_name": device.device_name,
+                        "channel_number": str(channel.channel_num),
+                    }
+                else:
+                    circuit_name = f"{device.device_name} {channel.channel_num}"
+
+            dev_reg.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, f"{device.device_gid}-{channel.channel_num}")},
+                name=circuit_name,
+                model=determine_circuit_model(channel),
+                model_id=None,
+                sw_version=device.firmware,
+                manufacturer="Emporia",
+                via_device_id=parent_entry.id if parent_entry else None,
+                translation_key=translation_key,
+                translation_placeholders=translation_placeholders,
+            )
+
+
+def async_prune_stale_devices(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_info_map: dict[int, VueDevice],
+) -> None:
+    """Safely remove stale dummy circuit devices from Device Registry."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    inactive_identifiers: set[tuple[str, str]] = set()
+    for device in device_info_map.values():
+        if not device.channels:
+            continue
+        for channel in device.channels:
+            if channel.channel_num != "1,2,3" and channel.has_data is False:
+                inactive_identifiers.add(
+                    (DOMAIN, f"{device.device_gid}-{channel.channel_num}")
+                )
+
+    if not inactive_identifiers:
+        return
+
+    existing_devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+    for device_entry in existing_devices:
+        matching_inactive = any(
+            ident in inactive_identifiers for ident in device_entry.identifiers
+        )
+        if not matching_inactive:
+            continue
+
+        # Preserve if user customized the device
+        if device_entry.name_by_user is not None:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user-customized name",
+                device_entry.id,
+            )
+            continue
+        if device_entry.area_id is not None:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to assigned area",
+                device_entry.id,
+            )
+            continue
+        if device_entry.labels:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user labels",
+                device_entry.id,
+            )
+            continue
+
+        # Check if any entity under this device was customized/disabled by the user
+        device_entities = er.async_entries_for_device(
+            ent_reg, device_entry.id, include_disabled_entities=True
+        )
+        has_user_disabled = any(
+            entity.disabled_by == er.RegistryEntryDisabler.USER
+            for entity in device_entities
+        )
+        if has_user_disabled:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user-disabled entity",
+                device_entry.id,
+            )
+            continue
+
+        for entity in device_entities:
+            _LOGGER.info(
+                "Pruning inactive entity %s from device %s",
+                entity.entity_id,
+                device_entry.id,
+            )
+            ent_reg.async_remove(entity.entity_id)
+
+        _LOGGER.info(
+            "Pruning inactive uncustomized dummy device %s (%s)",
+            device_entry.id,
+            device_entry.identifiers,
+        )
+        dev_reg.async_remove_device(device_entry.id)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -158,7 +374,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LAST_DAY_INTEGRATED_MINUTE.clear()
     LAST_MONTH_INTEGRATED_MINUTE.clear()
 
-    entry_data = entry.data
+    entry_data = {**entry.data, **entry.options}
     _LOGGER.debug(
         "Setting up Emporia Vue with entry data: %s",
         redact_config_data(entry_data),
@@ -177,7 +393,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # pylint: disable=broad-exception-caught
         raise ConfigEntryNotReady(f"Failed to login to Emporia Vue: {err}") from err
 
-    if entry_data.get(AUTH_METHOD) == AUTH_METHOD_TOKENS and vue.auth and vue.auth.tokens:
+    if (
+        entry_data.get(AUTH_METHOD) == AUTH_METHOD_TOKENS
+        and vue.auth
+        and vue.auth.tokens
+    ):
         # Persist the tokens refreshed during login back to the config entry so
         # that the stored tokens stay current across restarts.
         hass.config_entries.async_update_entry(
@@ -207,14 +427,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        if hasattr(vue, "get_devices_v1"):
-            devices: list[VueDevice] = await loop.run_in_executor(
-                None, vue.get_devices_v1
-            )
-        else:
-            devices: list[VueDevice] = await loop.run_in_executor(
-                None, vue.get_devices
-            )
+        get_devices_func = getattr(vue, "get_devices_v1", vue.get_devices)
+        devices: list[VueDevice] = await loop.run_in_executor(None, get_devices_func)
         for device in devices:
             for channel in device.channels:
                 if not channel.device_gid:
@@ -226,6 +440,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             else:
                 DEVICE_INFORMATION[device.device_gid].channels += device.channels
 
+        # Cross-resolve parent_device_gid if parent_device_id is provided
+        devices_by_id = {
+            dev_id: d
+            for d in DEVICE_INFORMATION.values()
+            if (
+                dev_id := (
+                    getattr(d, "device_id", None) or getattr(d, "manufacturer_id", None)
+                )
+            )
+        }
+        for d in DEVICE_INFORMATION.values():
+            parent_id = getattr(d, "parent_device_id", None)
+            if (
+                (not getattr(d, "parent_device_gid", None) or d.parent_device_gid == 0)
+                and parent_id
+                and parent_id in devices_by_id
+            ):
+                d.parent_device_gid = devices_by_id[parent_id].device_gid
+
         total_channels = 0
         for device in DEVICE_INFORMATION.values():
             total_channels += len(device.channels)
@@ -234,6 +467,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(DEVICE_INFORMATION.keys()),
             total_channels,
         )
+
+        # Safely prune stale uncustomized dummy CT circuit devices from Device Registry
+        async_prune_stale_devices(hass, entry, DEVICE_INFORMATION)
+
+        # Pre-register device hierarchy in Device Registry
+        async_setup_device_registry(hass, entry, DEVICE_INFORMATION)
 
         async def async_update_data_1min() -> dict:
             """Fetch data from API endpoint at a 1 minute interval.
@@ -292,7 +531,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             global LAST_MONTH_UPDATE
             global LAST_MONTH_DATA
             now: datetime = datetime.now(UTC)
-            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
+            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(
+                minutes=30
+            ):
                 _LOGGER.info("Updating month sensors")
                 LAST_MONTH_UPDATE = now
                 updated_month_data = await update_sensors(vue, [Scale.MONTH.value])
@@ -308,7 +549,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if LAST_MINUTE_DATA:
                     for identifier, data in LAST_MINUTE_DATA.items():
                         device_gid, channel_gid, _ = identifier.split("-")
-                        month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                        month_id: str = (
+                            f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                        )
                         if (
                             data
                             and LAST_MONTH_DATA
@@ -323,7 +566,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 LAST_MONTH_INTEGRATED_MINUTE, month_id, timestamp
                             ):
                                 continue
-                            await check_for_new_month(timestamp, int(device_gid), month_id)
+                            await check_for_new_month(
+                                timestamp, int(device_gid), month_id
+                            )
 
                             LAST_MONTH_DATA[month_id]["usage"] += data[
                                 "usage"
@@ -398,8 +643,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Check if any devices have outlets or chargers
         has_controllable_devices = any(
-            device.outlet or device.ev_charger
-            for device in DEVICE_INFORMATION.values()
+            device.outlet or device.ev_charger for device in DEVICE_INFORMATION.values()
         )
 
         async def async_update_device_status() -> dict[str, Any]:
@@ -409,7 +653,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 outlets: list[OutletDevice]
                 chargers: list[ChargerDevice]
 
-                outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
+                outlets, chargers = await hass.async_add_executor_job(
+                    vue.get_devices_status
+                )
 
                 if outlets:
                     for outlet in outlets:
@@ -419,7 +665,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         data[str(charger.device_gid)] = charger
                 return data
             except Exception as err:
-                raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+                raise UpdateFailed(
+                    f"Error communicating with Emporia API: {err}"
+                ) from err
 
         coordinator_device_status = None
         if has_controllable_devices:
@@ -560,7 +808,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Error setting up platforms: %s", err)
         raise ConfigEntryNotReady(f"Error setting up platforms: {err}") from err
 
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
     return True
+
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -660,6 +915,9 @@ async def parse_flattened_usage_data(
             )
         for info_channel in info.channels:
             identifier: str = make_channel_id(info_channel, scale)
+            if info_channel.has_data is False:
+                unused_data.pop(identifier, None)
+                continue
             channel_num = info_channel.channel_num
             channel: VueDeviceChannelUsage | None = flattened_data.get(identifier)
             if not channel:
