@@ -94,6 +94,58 @@ def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _async_discover_devices(
+    vue: PyEmVue, loop: asyncio.AbstractEventLoop
+) -> list[VueDevice]:
+    """Discover Emporia devices via V1 endpoint with runtime fallback to legacy."""
+    devices: list[VueDevice] = []
+    if hasattr(vue, "get_devices_v1"):
+        try:
+            devices = await loop.run_in_executor(None, vue.get_devices_v1)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "V1 device discovery failed, falling back to legacy get_devices: %s",
+                err,
+            )
+            devices = []
+    if not devices:
+        devices = await loop.run_in_executor(None, vue.get_devices)
+    return devices
+
+
+def _merge_discovered_devices(
+    devices: list[VueDevice],
+    device_gids: list[str],
+    device_information: dict[int, VueDevice],
+) -> None:
+    """Populate global device lists, deduplicating channels and merging device attachments."""
+    for device in devices:
+        for channel in device.channels:
+            if not channel.device_gid:
+                channel.device_gid = device.device_gid
+        if str(device.device_gid) not in device_gids:
+            device_gids.append(str(device.device_gid))
+            _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
+            device_information[device.device_gid] = device
+        else:
+            existing = device_information[device.device_gid]
+            existing_nums = {ch.channel_num for ch in existing.channels}
+            for channel in device.channels:
+                if channel.channel_num not in existing_nums:
+                    existing.channels.append(channel)
+                    existing_nums.add(channel.channel_num)
+            if not getattr(existing, "outlet", None) and getattr(
+                device, "outlet", None
+            ):
+                existing.outlet = device.outlet
+            if not getattr(existing, "ev_charger", None) and getattr(
+                device, "ev_charger", None
+            ):
+                existing.ev_charger = device.ev_charger
+            if not getattr(existing, "evse", None) and getattr(device, "evse", None):
+                existing.evse = device.evse
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Emporia Vue component."""
     hass.data.setdefault(DOMAIN, {})
@@ -207,14 +259,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
-        for device in devices:
-            if str(device.device_gid) not in DEVICE_GIDS:
-                DEVICE_GIDS.append(str(device.device_gid))
-                _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
-                DEVICE_INFORMATION[device.device_gid] = device
-            else:
-                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+        devices: list[VueDevice] = await _async_discover_devices(vue, loop)
+        _merge_discovered_devices(devices, DEVICE_GIDS, DEVICE_INFORMATION)
 
         total_channels = 0
         for device in DEVICE_INFORMATION.values():
