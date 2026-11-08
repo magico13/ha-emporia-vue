@@ -15,7 +15,7 @@ import requests
 import voluptuous as vol
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryNotReady,
@@ -150,6 +150,55 @@ def get_device_depth(d: VueDevice, device_info_map: dict[int, VueDevice]) -> int
     return depth
 
 
+def sync_child_device_disabled_state(
+    dev_reg: dr.DeviceRegistry,
+    child_dev: dr.DeviceEntry,
+    parent_dev: dr.DeviceEntry | None,
+) -> bool:
+    """Mirror parent device disabled state onto child devices. Return True if changed."""
+    if not parent_dev:
+        return False
+    if parent_dev.disabled_by and child_dev.disabled_by is None:
+        dev_reg.async_update_device(
+            child_dev.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
+        )
+        return True
+    if (
+        not parent_dev.disabled_by
+        and child_dev.disabled_by is dr.DeviceEntryDisabler.INTEGRATION
+    ):
+        dev_reg.async_update_device(child_dev.id, disabled_by=None)
+        return True
+    return False
+
+
+def sync_device_disabled_cascade(
+    dev_reg: dr.DeviceRegistry,
+    entry_id: str,
+    parent_id: str,
+    parent_disabled: bool,
+) -> None:
+    """Recursively cascade parent disabled state down the via_device_id hierarchy."""
+    devices = (
+        dr.async_entries_for_config_entry(dev_reg, entry_id)
+        if hasattr(dr, "async_entries_for_config_entry")
+        else list(dev_reg.devices.values())
+    )
+    for child in devices:
+        if child.via_device_id == parent_id:
+            if parent_disabled and child.disabled_by is None:
+                dev_reg.async_update_device(
+                    child.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
+                )
+                sync_device_disabled_cascade(dev_reg, entry_id, child.id, True)
+            elif (
+                not parent_disabled
+                and child.disabled_by is dr.DeviceEntryDisabler.INTEGRATION
+            ):
+                dev_reg.async_update_device(child.id, disabled_by=None)
+                sync_device_disabled_cascade(dev_reg, entry_id, child.id, False)
+
+
 def async_setup_device_registry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -177,7 +226,7 @@ def async_setup_device_registry(
             if parent_gid and parent_gid != 0 and parent_gid != device.device_gid
             else None
         )
-        dev_reg.async_get_or_create(
+        child_dev = dev_reg.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{device.device_gid}-1,2,3")},
             name=device.device_name,
@@ -189,6 +238,7 @@ def async_setup_device_registry(
             else None,
             via_device_id=parent_entry.id if parent_entry else None,
         )
+        sync_child_device_disabled_state(dev_reg, child_dev, parent_entry)
 
     # Pass 2: CT Circuit Sub-Devices
     for device in device_info_map.values():
@@ -215,7 +265,7 @@ def async_setup_device_registry(
                 else:
                     circuit_name = f"{device.device_name} {channel.channel_num}"
 
-            dev_reg.async_get_or_create(
+            ct_dev = dev_reg.async_get_or_create(
                 config_entry_id=entry.entry_id,
                 identifiers={(DOMAIN, f"{device.device_gid}-{channel.channel_num}")},
                 name=circuit_name,
@@ -226,6 +276,42 @@ def async_setup_device_registry(
                 via_device_id=parent_entry.id if parent_entry else None,
                 translation_key=translation_key,
                 translation_placeholders=translation_placeholders,
+            )
+            sync_child_device_disabled_state(dev_reg, ct_dev, parent_entry)
+
+    # Pass 2b: Link existing unlinked sub-devices to their parent monitor via_device_id
+    # Captures preserved unused CT devices from prior versions or user customizations,
+    # merged circuits, and virtual circuits.
+    existing_devices = (
+        dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+        if hasattr(dr, "async_entries_for_config_entry")
+        else list(dev_reg.devices.values())
+    )
+    for dev_entry in existing_devices:
+        for domain, ident in dev_entry.identifiers:
+            if domain == DOMAIN and "-" in ident:
+                gid_part, ch_part = ident.split("-", 1)
+                if (
+                    gid_part.isdigit()
+                    and ch_part not in ("1,2,3", "1,2", "1,3", "2,3")
+                    and not dev_entry.via_device_id
+                ):
+                    parent = _lookup_device_entry((DOMAIN, f"{gid_part}-1,2,3"))
+                    if parent and parent.id != dev_entry.id:
+                        dev_reg.async_update_device(
+                            dev_entry.id, via_device_id=parent.id
+                        )
+
+    # Pass 3: Cascade disabled state across full via_device_id hierarchy (including virtual circuits)
+    for device in sorted_physical_devices:
+        ident = (DOMAIN, f"{device.device_gid}-1,2,3")
+        parent_dev = _lookup_device_entry(ident)
+        if parent_dev:
+            sync_device_disabled_cascade(
+                dev_reg,
+                entry.entry_id,
+                parent_dev.id,
+                bool(parent_dev.disabled_by),
             )
 
 
@@ -473,6 +559,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Pre-register device hierarchy in Device Registry
         async_setup_device_registry(hass, entry, DEVICE_INFORMATION)
+
+        @callback
+        def _async_handle_device_registry_update(
+            event: Event[dr.EventDeviceRegistryUpdatedData],
+        ) -> None:
+            """Handle real-time device registry updates to cascade disabled state."""
+            if event.data.get("action") != "update":
+                return
+            changes = event.data.get("changes", {})
+            if "disabled_by" not in changes:
+                return
+
+            device_id = event.data.get("device_id")
+            dev_reg = dr.async_get(hass)
+            updated_dev = dev_reg.async_get(device_id)
+            dev_entry_id = getattr(updated_dev, "config_entry_id", None)
+            dev_entries = getattr(updated_dev, "config_entries", set())
+            if not updated_dev or (
+                dev_entry_id != entry.entry_id and entry.entry_id not in dev_entries
+            ):
+                return
+
+            sync_device_disabled_cascade(
+                dev_reg,
+                entry.entry_id,
+                updated_dev.id,
+                bool(updated_dev.disabled_by),
+            )
+
+        entry.async_on_unload(
+            hass.bus.async_listen(
+                dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_handle_device_registry_update
+            )
+        )
 
         async def async_update_data_1min() -> dict:
             """Fetch data from API endpoint at a 1 minute interval.

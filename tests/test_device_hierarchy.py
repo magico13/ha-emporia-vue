@@ -17,7 +17,7 @@ from custom_components.emporia_vue.sensor import (
     async_setup_entry as sensor_async_setup_entry,
 )
 from custom_components.emporia_vue.switch import EmporiaOutletSwitch
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pyemvue.device import ChargerDevice, OutletDevice, VueDevice, VueDeviceChannel
@@ -667,3 +667,196 @@ async def test_device_info_name_fallback_when_device_name_empty(
         "device_name": "Custom Panel Display",
         "channel_number": "1",
     }
+
+
+async def test_cascading_device_disable(
+    hass: HomeAssistant, emporia_devices: dict[int, VueDevice]
+) -> None:
+    """Test cascading parent monitor disable to child hardware, CT circuits, and virtual circuits."""
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="test_cascade_entry")
+    entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+
+    # 1. Initial setup - all devices enabled
+    async_setup_device_registry(hass, entry, emporia_devices)
+
+    home_dev = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "1001-1,2,3"), entry.entry_id
+    )
+    garage_dev = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "1002-1,2,3"), entry.entry_id
+    )
+    ct1 = dev_reg.async_get_device_by_identifier((DOMAIN, "1001-1"), entry.entry_id)
+    ct3 = dev_reg.async_get_device_by_identifier((DOMAIN, "1001-3"), entry.entry_id)
+
+    # Also register a virtual circuit (e.g. Balance) linked via via_device_id
+    balance_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-Balance")},
+        name="Home Vue Balance",
+        via_device_id=home_dev.id,
+    )
+
+    assert home_dev is not None and home_dev.disabled_by is None
+    assert garage_dev is not None and garage_dev.disabled_by is None
+    assert ct1 is not None and ct1.disabled_by is None
+    assert ct3 is not None and ct3.disabled_by is None
+    assert balance_dev is not None and balance_dev.disabled_by is None
+
+    # 2. Manually disable circuit 3 as a USER
+    dev_reg.async_update_device(ct3.id, disabled_by=dr.DeviceEntryDisabler.USER)
+
+    # 3. Disable parent monitor (Home Vue)
+    dev_reg.async_update_device(home_dev.id, disabled_by=dr.DeviceEntryDisabler.USER)
+
+    # 4. Trigger registry setup (as on integration reload)
+    async_setup_device_registry(hass, entry, emporia_devices)
+
+    # Re-fetch device states
+    home_dev = dev_reg.async_get(home_dev.id)
+    garage_dev = dev_reg.async_get(garage_dev.id)
+    ct1 = dev_reg.async_get(ct1.id)
+    ct3 = dev_reg.async_get(ct3.id)
+    balance_dev = dev_reg.async_get(balance_dev.id)
+
+    assert home_dev.disabled_by == dr.DeviceEntryDisabler.USER
+    # Child devices must have cascaded INTEGRATION disable
+    assert garage_dev.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    assert ct1.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    assert balance_dev.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    # Manually disabled circuit must retain USER disable
+    assert ct3.disabled_by == dr.DeviceEntryDisabler.USER
+
+    # 5. Re-enable parent monitor
+    dev_reg.async_update_device(home_dev.id, disabled_by=None)
+
+    # 6. Trigger registry setup on reload
+    async_setup_device_registry(hass, entry, emporia_devices)
+
+    # Re-fetch device states
+    home_dev = dev_reg.async_get(home_dev.id)
+    garage_dev = dev_reg.async_get(garage_dev.id)
+    ct1 = dev_reg.async_get(ct1.id)
+    ct3 = dev_reg.async_get(ct3.id)
+    balance_dev = dev_reg.async_get(balance_dev.id)
+
+    assert home_dev.disabled_by is None
+    # Cascaded devices must be restored to enabled
+    assert garage_dev.disabled_by is None
+    assert ct1.disabled_by is None
+    assert balance_dev.disabled_by is None
+    # Manually disabled circuit must remain disabled by USER
+    assert ct3.disabled_by == dr.DeviceEntryDisabler.USER
+
+
+async def test_realtime_cascading_device_disable_event(
+    hass: HomeAssistant, emporia_devices: dict[int, VueDevice]
+) -> None:
+    """Test real-time event-driven cascading disable without integration reload."""
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="test_realtime_cascade_entry")
+    entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+
+    async_setup_device_registry(hass, entry, emporia_devices)
+
+    home_dev = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "1001-1,2,3"), entry.entry_id
+    )
+    garage_dev = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "1002-1,2,3"), entry.entry_id
+    )
+    ct1 = dev_reg.async_get_device_by_identifier((DOMAIN, "1001-1"), entry.entry_id)
+    ct3 = dev_reg.async_get_device_by_identifier((DOMAIN, "1001-3"), entry.entry_id)
+
+    from custom_components.emporia_vue import sync_device_disabled_cascade
+    from homeassistant.core import callback
+
+    @callback
+    def _async_handle_device_registry_update(
+        event: Event[dr.EventDeviceRegistryUpdatedData],
+    ) -> None:
+        if event.data.get("action") != "update":
+            return
+        changes = event.data.get("changes", {})
+        if "disabled_by" not in changes:
+            return
+        device_id = event.data.get("device_id")
+        updated_dev = dev_reg.async_get(device_id)
+        dev_entry_id = getattr(updated_dev, "config_entry_id", None)
+        dev_entries = getattr(updated_dev, "config_entries", set())
+        if not updated_dev or (
+            dev_entry_id != entry.entry_id and entry.entry_id not in dev_entries
+        ):
+            return
+        sync_device_disabled_cascade(
+            dev_reg,
+            entry.entry_id,
+            updated_dev.id,
+            bool(updated_dev.disabled_by),
+        )
+
+    entry.async_on_unload(
+        hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_handle_device_registry_update
+        )
+    )
+
+    # 1. Manually disable circuit 3 by USER
+    dev_reg.async_update_device(ct3.id, disabled_by=dr.DeviceEntryDisabler.USER)
+    await hass.async_block_till_done()
+
+    # 2. Disable Home Vue via UI/dev_reg in real time
+    dev_reg.async_update_device(home_dev.id, disabled_by=dr.DeviceEntryDisabler.USER)
+    await hass.async_block_till_done()
+
+    # Child devices must be cascaded without reload
+    garage_dev = dev_reg.async_get(garage_dev.id)
+    ct1 = dev_reg.async_get(ct1.id)
+    ct3 = dev_reg.async_get(ct3.id)
+
+    assert garage_dev.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    assert ct1.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    assert ct3.disabled_by == dr.DeviceEntryDisabler.USER
+
+    # 3. Re-enable Home Vue via UI/dev_reg in real time
+    dev_reg.async_update_device(home_dev.id, disabled_by=None)
+    await hass.async_block_till_done()
+
+    garage_dev = dev_reg.async_get(garage_dev.id)
+    ct1 = dev_reg.async_get(ct1.id)
+    ct3 = dev_reg.async_get(ct3.id)
+
+    assert garage_dev.disabled_by is None
+    assert ct1.disabled_by is None
+    assert ct3.disabled_by == dr.DeviceEntryDisabler.USER
+
+
+async def test_pass_2b_links_existing_unused_cts_via_device_id(
+    hass: HomeAssistant, emporia_devices: dict[int, VueDevice]
+) -> None:
+    """Test that existing unused CT sub-devices without via_device_id are linked to their parent monitor."""
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="test_unlinked_cts_entry")
+    entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+
+    # Pre-create an unused CT device without via_device_id (e.g. from legacy integration version)
+    unused_ct = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-4")},
+        name="Garage Circuit 4",
+    )
+    dev_reg.async_update_device(unused_ct.id, name_by_user="x4 Garage")
+    assert unused_ct.via_device_id is None
+
+    # Run setup
+    async_setup_device_registry(hass, entry, emporia_devices)
+
+    home_dev = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "1001-1,2,3"), entry.entry_id
+    )
+    updated_ct = dev_reg.async_get(unused_ct.id)
+
+    # via_device_id must now be linked to parent monitor
+    assert updated_ct.via_device_id == home_dev.id
+    # User customization must be strictly preserved
+    assert updated_ct.name_by_user == "x4 Garage"
