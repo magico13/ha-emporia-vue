@@ -32,6 +32,9 @@ async def async_setup_entry(
     device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
         "device_information"
     ]
+    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
+        "site_map", {}
+    )
 
     if coordinator is None or coordinator.data is None:
         return
@@ -43,7 +46,9 @@ async def async_setup_entry(
             continue
         device = device_information[int_gid]
         if device.ev_charger:
-            entities.append(EmporiaChargerCurrentNumber(coordinator, vue, device))
+            entities.append(
+                EmporiaChargerCurrentNumber(coordinator, vue, device, site_map=site_map)
+            )
 
     async_add_entities(entities)
 
@@ -56,6 +61,7 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
         coordinator: DataUpdateCoordinator[dict[str, Any]],
         vue: PyEmVue,
         device: VueDevice,
+        site_map: dict[int, Any] | None = None,
     ) -> None:
         """Initialize the number entity."""
         super().__init__(
@@ -64,6 +70,7 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
             device,
             UnitOfElectricCurrent.AMPERE,
             NumberDeviceClass.CURRENT,
+            site_map=site_map,
         )
         self._attr_native_min_value = 6.0
         self._attr_native_max_value = float(device.ev_charger.max_charging_rate)
