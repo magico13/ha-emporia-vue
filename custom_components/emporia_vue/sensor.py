@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -23,6 +24,7 @@ from pyemvue.device import ChargerDevice, VueDevice, VueDeviceChannel
 from pyemvue.enums import Scale
 
 from . import determine_circuit_model
+from .charger_entity import EmporiaLocationEntityMixin
 from .const import DOMAIN
 from .resilience import TolerantUpdateMethod
 
@@ -60,6 +62,10 @@ async def async_setup_entry(
                     return ch.has_data is not False
         return True
 
+    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
+        "site_map", {}
+    )
+
     if coordinator_1min:
         power_sensors: list[SensorEntity] = []
         voltage_sensors: list[SensorEntity] = []
@@ -70,11 +76,15 @@ async def async_setup_entry(
             channel_num = channel_data.get("channel_num")
             if channel_num not in SPLIT_PHASE_MAINS_CHANNELS:
                 power_sensors.append(
-                    CurrentVuePowerSensor(coordinator_1min, identifier)
+                    CurrentVuePowerSensor(
+                        coordinator_1min, identifier, site_map=site_map
+                    )
                 )
             elif channel_data.get("voltage") is not None:
                 voltage_sensors.append(
-                    CurrentVueVoltageSensor(coordinator_1min, identifier)
+                    CurrentVueVoltageSensor(
+                        coordinator_1min, identifier, site_map=site_map
+                    )
                 )
 
         async_add_entities(power_sensors)
@@ -83,7 +93,7 @@ async def async_setup_entry(
 
     if coordinator_1mon:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_1mon, identifier)
+            CurrentVuePowerSensor(coordinator_1mon, identifier, site_map=site_map)
             for identifier in coordinator_1mon.data
             if _is_channel_active(coordinator_1mon, identifier)
             and coordinator_1mon.data[identifier].get("channel_num")
@@ -92,7 +102,7 @@ async def async_setup_entry(
 
     if coordinator_day_sensor:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_day_sensor, identifier)
+            CurrentVuePowerSensor(coordinator_day_sensor, identifier, site_map=site_map)
             for identifier in coordinator_day_sensor.data
             if _is_channel_active(coordinator_day_sensor, identifier)
             and coordinator_day_sensor.data[identifier].get("channel_num")
@@ -129,13 +139,21 @@ async def async_setup_entry(
         )
 
 
-class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+class CurrentVuePowerSensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
     """Representation of a Vue Sensor's current power."""
 
-    def __init__(self, coordinator, identifier) -> None:
+    def __init__(
+        self,
+        coordinator,
+        identifier: str,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._id = identifier
+        self._explicit_site_map = site_map
         self._scale: str = coordinator.data[identifier]["scale"]
         device_gid: int = coordinator.data[identifier]["device_gid"]
         channel_num: str = coordinator.data[identifier]["channel_num"]
@@ -291,13 +309,21 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         return self._scale
 
 
-class CurrentVueVoltageSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+class CurrentVueVoltageSensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
     """Representation of a Vue Sensor's split-phase voltage."""
 
-    def __init__(self, coordinator, identifier: str) -> None:
+    def __init__(
+        self,
+        coordinator,
+        identifier: str,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._id = identifier
+        self._explicit_site_map = site_map
         device_gid: int = coordinator.data[identifier]["device_gid"]
         channel_num: str = coordinator.data[identifier]["channel_num"]
         self._device: VueDevice = coordinator.data[identifier]["info"]
@@ -529,14 +555,22 @@ def _map_charger_state(
 CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
 
 
-class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+class EmporiaChargerStatusSensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
     """Representation of an Emporia Charger status sensor."""
 
-    def __init__(self, coordinator, device: VueDevice) -> None:
+    def __init__(
+        self,
+        coordinator,
+        device: VueDevice,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
         """Initialize the charger status sensor."""
         super().__init__(coordinator)
         self._device = device
         self._device_gid = str(device.device_gid)
+        self._explicit_site_map = site_map
         self._attr_has_entity_name = True
         self._attr_name = "Status"
         self._attr_translation_key = "charger_status"
@@ -554,18 +588,21 @@ class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: igno
         return "Unknown"
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return IEC code and raw Emporia values as attributes."""
+        attrs = dict(super().extra_state_attributes or {})
         data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
         if data:
             _, iec_code = _map_charger_state(data.status, data.message, data.fault_text)
-            return {
-                "iec_status": iec_code,
-                "raw_status": data.status,
-                "raw_message": data.message,
-                "fault_text": data.fault_text,
-            }
-        return {}
+            attrs.update(
+                {
+                    "iec_status": iec_code,
+                    "raw_status": data.status,
+                    "raw_message": data.message,
+                    "fault_text": data.fault_text,
+                }
+            )
+        return attrs
 
     @property
     def unique_id(self) -> str:

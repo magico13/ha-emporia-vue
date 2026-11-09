@@ -145,7 +145,9 @@ def determine_circuit_model(
         return "200A CT circuit"
     if "merged" in classification:
         return (
-            f"Merged CT circuit (Branch {num})" if num.isdigit() else "Merged CT circuit"
+            f"Merged CT circuit (Branch {num})"
+            if num.isdigit()
+            else "Merged CT circuit"
         )
 
     if num.isdigit():
@@ -475,6 +477,7 @@ async def async_login_vue(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
@@ -577,6 +580,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             total_channels,
         )
 
+        # Query sites for dynamic location metadata mapping
+        site_map: dict[int, str] = {}
+        if hasattr(vue, "get_sites"):
+            try:
+                sites = await loop.run_in_executor(None, vue.get_sites)
+                if sites:
+                    for site in sites:
+                        sgid = getattr(site, "site_gid", None)
+                        if sgid is not None:
+                            site_map[int(sgid)] = (
+                                getattr(site, "display_name", "") or ""
+                            )
+                            # Cross-assign to devices if device.site_gid was missing
+                            for dev in DEVICE_INFORMATION.values():
+                                if getattr(dev, "site_gid", None) is None:
+                                    dev_identifiers = {
+                                        str(dev.device_gid),
+                                        str(getattr(dev, "manufacturer_id", "") or ""),
+                                        str(getattr(dev, "device_id", "") or ""),
+                                    }
+                                    site_dev_ids = {
+                                        str(did)
+                                        for did in getattr(site, "device_ids", [])
+                                    }
+                                    if dev_identifiers & site_dev_ids:
+                                        dev.site_gid = int(sgid)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Failed to fetch sites from Emporia: %s", err)
+
         # Safely prune stale uncustomized dummy CT circuit devices from Device Registry
         async_prune_stale_devices(hass, entry, DEVICE_INFORMATION)
 
@@ -641,6 +673,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 updated_day_data = await update_sensors(vue, [Scale.DAY.value])
                 apply_api_update_debounce(updated_day_data, LAST_DAY_DATA, "day")
                 LAST_DAY_DATA = updated_day_data
+                if hasattr(vue, "get_sites"):
+                    try:
+                        refreshed_sites = await loop.run_in_executor(
+                            None, vue.get_sites
+                        )
+                        if refreshed_sites:
+                            for site in refreshed_sites:
+                                sgid = getattr(site, "site_gid", None)
+                                if sgid is not None:
+                                    site_map[int(sgid)] = (
+                                        getattr(site, "display_name", "") or ""
+                                    )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("Failed to refresh sites: %s", err)
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
@@ -733,6 +779,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="minute telemetry",
                 update_method=minute_update_method,
@@ -754,6 +801,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="monthly telemetry",
                 update_method=monthly_update_method,
@@ -776,6 +824,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_day_sensor = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="daily telemetry",
                 update_method=daily_update_method,
@@ -817,6 +866,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_device_status = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 name="device_status",
                 update_method=async_update_device_status,
                 update_interval=timedelta(minutes=1),
@@ -943,6 +993,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_device_status": coordinator_device_status,
         "device_information": DEVICE_INFORMATION,
         "retry_update_methods": retry_update_methods,
+        "site_map": site_map,
     }
 
     try:
@@ -1395,10 +1446,11 @@ def determine_reset_datetime(
     if is_month:
         # Month should use the most recent billing_cycle_start_day midnight.
         # Never return a future reset datetime.
+        cycle_start = max(1, int(monthly_cycle_start)) if monthly_cycle_start else 1
         last_day_this_month = calendar.monthrange(
             reset_datetime.year, reset_datetime.month
         )[1]
-        target_day_this_month = min(monthly_cycle_start, last_day_this_month)
+        target_day_this_month = min(cycle_start, last_day_this_month)
         candidate_this_month = reset_datetime.replace(day=target_day_this_month)
 
         if local_time >= candidate_this_month:
@@ -1410,9 +1462,7 @@ def determine_reset_datetime(
             last_day_previous_month = calendar.monthrange(
                 previous_month.year, previous_month.month
             )[1]
-            target_day_previous_month = min(
-                monthly_cycle_start, last_day_previous_month
-            )
+            target_day_previous_month = min(cycle_start, last_day_previous_month)
             reset_datetime = previous_month.replace(day=target_day_previous_month)
     return reset_datetime
 
