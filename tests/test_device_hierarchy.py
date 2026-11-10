@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pyemvue.device import ChargerDevice, OutletDevice, VueDevice, VueDeviceChannel
@@ -14,6 +15,7 @@ from custom_components.emporia_vue import (
     _resolve_parent_device_gids,
     async_prune_stale_devices,
     async_register_device_registry_listener,
+    async_remove_config_entry_device,
     async_setup_device_registry,
     determine_circuit_model,
 )
@@ -993,3 +995,79 @@ async def test_pass_2b_links_existing_unused_cts_via_device_id(
     assert updated_ct.name_by_user == "x4 Garage"
     # Mains_A must not be adopted by Pass 2b
     assert updated_mains_a.via_device_id is None
+
+
+async def test_async_remove_config_entry_device(
+    hass: HomeAssistant, emporia_devices: dict[int, VueDevice]
+) -> None:
+    """Test async_remove_config_entry_device allows deleting inactive/orphaned devices and protects active ones."""
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="test_remove_device_entry")
+    entry.add_to_hass(hass)
+
+    dev_reg = dr.async_get(hass)
+
+    # 1001-1 is channels[1] (has_data=True), 1001-4 is channels[4] (has_data=False)
+    assert emporia_devices[1001].channels[1].channel_num == "1"
+    assert emporia_devices[1001].channels[4].channel_num == "4"
+    emporia_devices[1001].channels[1].has_data = True
+    emporia_devices[1001].channels[4].has_data = False
+
+    # 0. Unloaded entry (missing hass.data entry): MUST reject deletion cleanly
+    monitor_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-1,2,3")},
+    )
+    with pytest.raises(HomeAssistantError, match="not loaded"):
+        await async_remove_config_entry_device(hass, entry, monitor_dev)
+
+    coord_1min = MagicMock()
+    coord_1min.data = {
+        "1001-Balance-1MIN": {"device_gid": 1001, "channel_num": "Balance"}
+    }
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "device_information": emporia_devices,
+        "coordinator_1min": coord_1min,
+    }
+
+    # 1. Main panel monitor device: MUST NOT be removable (raises HomeAssistantError)
+    with pytest.raises(
+        HomeAssistantError,
+        match="Cannot remove active device '.*'. Only inactive or decommissioned devices can be deleted.",
+    ):
+        await async_remove_config_entry_device(hass, entry, monitor_dev)
+
+    # 2. Active circuit device: MUST NOT be removable (raises HomeAssistantError)
+    active_ct_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-1")},
+    )
+    with pytest.raises(
+        HomeAssistantError,
+        match="Cannot remove active device '.*'. Only inactive or decommissioned devices can be deleted.",
+    ):
+        await async_remove_config_entry_device(hass, entry, active_ct_dev)
+
+    # 2b. Virtual coordinator channel (e.g. 1001-Balance): MUST NOT be removable
+    balance_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-Balance")},
+    )
+    with pytest.raises(
+        HomeAssistantError,
+        match="Cannot remove active device '.*'. Only inactive or decommissioned devices can be deleted.",
+    ):
+        await async_remove_config_entry_device(hass, entry, balance_dev)
+
+    # 3. Inactive circuit device (has_data=False): MUST be removable
+    inactive_ct_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-4")},
+    )
+    assert await async_remove_config_entry_device(hass, entry, inactive_ct_dev) is True
+
+    # 4. Orphaned legacy circuit device (e.g. 1001-97, not in cloud): MUST be removable
+    orphaned_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-97")},
+    )
+    assert await async_remove_config_entry_device(hass, entry, orphaned_dev) is True
