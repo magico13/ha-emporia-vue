@@ -3,10 +3,6 @@
 import logging
 from typing import Any
 
-from pyemvue import PyEmVue
-from pyemvue.device import VueDevice
-from requests import exceptions
-
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -16,6 +12,9 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from pyemvue import PyEmVue
+from pyemvue.device import VueDevice
+from requests import exceptions
 
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
@@ -30,9 +29,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the switch platform."""
     vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
+    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][
+        config_entry.entry_id
+    ]["coordinator_device_status"]
     device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
         "device_information"
     ]
@@ -46,6 +45,8 @@ async def async_setup_entry(
         if int_gid not in device_information:
             continue
         device = device_information[int_gid]
+        if device.channels and all(ch.has_data is False for ch in device.channels):
+            continue
         if device.outlet:
             switches.append(EmporiaOutletSwitch(coordinator, vue, gid, device))
         elif device.ev_charger:
@@ -106,6 +107,9 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
             model=self._device.model,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
         )
 
     @property

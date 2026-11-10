@@ -1,0 +1,172 @@
+{
+  "customerGid": 1234,
+  "devices": [
+    {
+      "deviceGid": 1001,
+      "manufacturerDeviceId": "F2410A0000000000000001",
+      "model": "VUE003",
+      "firmware": "1.0.0",
+      "parentDeviceGid": 0,
+      "parentChannelNum": "",
+      "locationProperties": {
+        "deviceName": "Main Panel",
+        "displayName": "Home",
+        "zipCode": "80202",
+        "timeZone": "America/Denver",
+        "usageCentPerKwHour": 12.0,
+        "peakDemandDollarPerKw": 0.0,
+        "billingCycleStartDay": 1,
+        "solar": true,
+        "utilityRateGid": 1234,
+        "locationInformation": {
+          "airConditioning": "true",
+          "heatSource": "heatPump",
+          "locationSqFt": "2500",
+          "numElectricCars": "1",
+          "locationType": "houseSingleFamily",
+          "numPeople": "3",
+          "swimmingPool": "false",
+          "hotTub": "false"
+        },
+        "latitudeLongitude": {
+          "latitude": 39.7392,
+          "longitude": -104.9903
+        }
+      },
+      "channels": [
+        {
+          "deviceGid": 1001,
+          "name": "Main",
+          "channelNum": "1,2,3",
+          "channelMultiplier": 1.0,
+          "channelTypeGid": 0,
+          "type": "Main",
+          "parentChannelNum": null
+        },
+        {
+          "deviceGid": 1001,
+          "name": "Solar",
+          "channelNum": "1",
+          "channelMultiplier": 1.0,
+          "channelTypeGid": 13,
+          "type": "FiftyAmpBidirectional",
+          "parentChannelNum": null
+        },
+        {
+          "deviceGid": 1001,
+          "name": "Heat Pump",
+          "channelNum": "2",
+          "channelMultiplier": 2.0,
+          "channelTypeGid": 24,
+          "type": "FiftyAmp",
+          "parentChannelNum": null
+        }
+      ],
+      "deviceConnected": {
+        "connected": true,
+        "offlineSince": "2026-01-01T00:00:00Z"
+      },
+      "devices": [
+        {
+          "deviceGid": 1002,
+          "manufacturerDeviceId": "A2237A0000000000000002",
+          "model": "VUE002",
+          "firmware": "1.0.0",
+          "parentDeviceGid": 1001,
+          "parentChannelNum": "1,2,3",
+          "locationProperties": {
+            "deviceName": "Subpanel",
+            "displayName": "Garage",
+            "zipCode": "80202",
+            "timeZone": "America/Denver",
+            "usageCentPerKwHour": 12.0,
+            "peakDemandDollarPerKw": 0.0,
+            "billingCycleStartDay": 1,
+            "solar": false
+          },
+          "channels": [
+            {
+              "deviceGid": 1002,
+              "name": "Sub Mains",
+              "channelNum": "1,2,3",
+              "channelMultiplier": 1.0,
+              "channelTypeGid": 0,
+              "type": "Main",
+              "parentChannelNum": null
+            }
+          ],
+          "deviceConnected": {
+            "connected": true,
+            "offlineSince": null
+          }
+        }
+      ]
+    },
+    {
+      "deviceGid": 1003,
+      "manufacturerDeviceId": "D2301A0000000000000003",
+      "model": "VVDN01",
+      "firmware": "1.0.0",
+      "parentDeviceGid": 1002,
+      "parentChannelNum": "1,2,3",
+      "locationProperties": {
+        "deviceName": "Charger",
+        "displayName": "EV Charger",
+        "zipCode": "80202",
+        "timeZone": "America/Denver",
+        "usageCentPerKwHour": 12.0,
+        "peakDemandDollarPerKw": 0.0,
+        "billingCycleStartDay": 1,
+        "solar": false
+      },
+      "evCharger": {
+        "deviceGid": 1003,
+        "loadGid": 9001,
+        "chargerOn": true,
+        "message": "Charging normally",
+        "status": "CHARGING",
+        "icon": "ev-station",
+        "iconLabel": "Active",
+        "iconDetailText": "40A @ 240V",
+        "faultText": "",
+        "chargingRate": 40,
+        "maxChargingRate": 48,
+        "offPeakSchedulesEnabled": false,
+        "debugCode": "DEBUG01",
+        "proControlCode": "PRO01",
+        "breakerPIN": "1234"
+      },
+      "deviceConnected": {
+        "connected": true,
+        "offlineSince": null
+      }
+    },
+    {
+      "deviceGid": 1005,
+      "manufacturerDeviceId": "O100000000000000000005",
+      "model": "OUTLET01",
+      "firmware": "1.0.0",
+      "parentDeviceGid": 0,
+      "parentChannelNum": "",
+      "locationProperties": {
+        "deviceName": "Smart Plug",
+        "displayName": "Living Room Plug",
+        "zipCode": "80202",
+        "timeZone": "America/Denver",
+        "usageCentPerKwHour": 12.0,
+        "peakDemandDollarPerKw": 0.0,
+        "billingCycleStartDay": 1,
+        "solar": false
+      },
+      "outlet": {
+        "deviceGid": 1005,
+        "outletOn": true,
+        "loadGid": 9002
+      },
+      "deviceConnected": {
+        "connected": true,
+        "offlineSince": null
+      }
+    }
+  ]
+}
