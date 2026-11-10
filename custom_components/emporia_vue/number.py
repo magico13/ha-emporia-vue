@@ -41,6 +41,8 @@ async def async_setup_entry(
 
     entities = []
     for gid in coordinator.data:
+        if not str(gid).isdigit():
+            continue
         int_gid = int(gid)
         if int_gid not in device_information:
             continue
@@ -96,18 +98,27 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
         """Set the charger current limit."""
         current = int(value)
         current = max(6, min(current, int(self._attr_native_max_value)))
+        charger_data = self.coordinator.data.get(self._device_gid)
+        dev_id = self.device_id
         try:
-            await self.hass.async_add_executor_job(
-                self._vue.update_charger,
-                self.coordinator.data[self._device_gid],
-                self.coordinator.data[self._device_gid].charger_on,
-                current,
-            )
+            if hasattr(self._vue, "set_evse_settings"):
+                await self.hass.async_add_executor_job(
+                    self._vue.set_evse_settings,
+                    dev_id,
+                    current,
+                )
+            else:
+                await self.hass.async_add_executor_job(
+                    self._vue.update_charger,
+                    charger_data,
+                    charger_data.charger_on if charger_data else True,
+                    current,
+                )
         except exceptions.HTTPError as err:
             _LOGGER.error(
                 "Error updating charger current: %s \nResponse body: %s",
                 err,
-                err.response.text,
+                err.response.text if err.response is not None else "",
             )
             raise
         await self.coordinator.async_request_refresh()

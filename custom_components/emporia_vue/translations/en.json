@@ -85,7 +85,12 @@
         },
         "sensor": {
             "charger_status": {
-                "name": "Status"
+                "name": "Status",
+                "state_attributes": {
+                    "iec_status": {
+                        "name": "IEC status"
+                    }
+                }
             },
             "mains_voltage_minute_average": {
                 "name": "Mains {leg} voltage minute average"

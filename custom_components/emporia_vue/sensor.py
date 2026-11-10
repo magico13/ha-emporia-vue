@@ -24,7 +24,15 @@ from pyemvue.device import ChargerDevice, VueDevice, VueDeviceChannel
 from pyemvue.enums import Scale
 
 from . import determine_circuit_model
-from .charger_entity import EmporiaLocationEntityMixin
+from .charger_entity import (
+    EmporiaLocationEntityMixin,
+    evaluate_charger_substatus,
+    evaluate_iec_charger_status,
+    is_charger_offline,
+    resolve_charger_load_gid,
+    resolve_effective_charger_status,
+    resolve_excess_solar_participation,
+)
 from .const import DOMAIN
 from .resilience import TolerantUpdateMethod
 
@@ -48,6 +56,10 @@ async def async_setup_entry(
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
+    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
+        "site_map", {}
+    )
+
     def _is_channel_active(coordinator, identifier: str) -> bool:
         if not coordinator or not coordinator.data:
             return False
@@ -61,10 +73,6 @@ async def async_setup_entry(
                 if ch.channel_num == channel_num:
                     return ch.has_data is not False
         return True
-
-    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
-        "site_map", {}
-    )
 
     if coordinator_1min:
         registered_voltage_ids: set[str] = set()
@@ -143,14 +151,23 @@ async def async_setup_entry(
         "device_information"
     ]
     if coordinator_device_status and coordinator_device_status.data:
-        async_add_entities(
-            EmporiaChargerStatusSensor(
-                coordinator_device_status, device_information[int(gid)]
-            )
-            for gid in coordinator_device_status.data
-            if int(gid) in device_information
-            and device_information[int(gid)].ev_charger
-        )
+        charger_sensors: list[SensorEntity] = []
+        for gid in coordinator_device_status.data:
+            if not str(gid).isdigit():
+                continue
+            int_gid = int(gid)
+            if int_gid in device_information and device_information[int_gid].ev_charger:
+                dev = device_information[int_gid]
+                charger_sensors.append(
+                    EmporiaChargerStatusSensor(
+                        coordinator_device_status,
+                        dev,
+                        device_information,
+                        site_map=site_map,
+                    )
+                )
+        if charger_sensors:
+            async_add_entities(charger_sensors)
 
 
 class CurrentVuePowerSensor(
@@ -527,44 +544,6 @@ class EmporiaApiLatencySensor(EmporiaUpdateTelemetrySensor):
 #             "Please Wait", "Charging Halted", ""
 
 
-def _map_charger_state(
-    status: str | None, message: str | None, fault_text: str | None
-) -> tuple[str, str]:
-    """Map Emporia charger status/message to a human-friendly state and IEC 61851 code."""
-    status_lower = (status or "").lower()
-    message_lower = (message or "").lower()
-    fault = (fault_text or "").strip()
-
-    # F: Fault condition
-    if (
-        fault
-        or "error" in status_lower
-        or "fault" in status_lower
-        or "error" in message_lower
-        or "fault" in message_lower
-    ):
-        return "Error", "F"
-    # C: Actively charging
-    if status_lower == "charging":
-        return "Charging", "C"
-    # A: Disconnected -  no EV present or device offline
-    if not status_lower:
-        return "Disconnected", "A"
-    if status_lower == "devicenotconnected":
-        return "Disconnected", "A"
-    if status_lower == "standby" and message_lower in (
-        "ready",
-        "off",
-        "self test",
-        "please wait",
-    ):
-        return "Disconnected", "A"
-    # B: Connected but not charging (default for unknown/unmapped states)
-    if status_lower != "standby":
-        _LOGGER.debug("Unmapped charger state: status=%s, message=%s", status, message)
-    return "Connected", "B"
-
-
 CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
 
 
@@ -577,12 +556,14 @@ class EmporiaChargerStatusSensor(
         self,
         coordinator,
         device: VueDevice,
+        device_information: dict[int, VueDevice] | None = None,
         site_map: dict[int, Any] | None = None,
     ) -> None:
         """Initialize the charger status sensor."""
         super().__init__(coordinator)
         self._device = device
         self._device_gid = str(device.device_gid)
+        self._device_information = device_information or {}
         self._explicit_site_map = site_map
         self._attr_has_entity_name = True
         self._attr_name = "Status"
@@ -591,30 +572,67 @@ class EmporiaChargerStatusSensor(
         self._attr_options = CHARGER_STATUS_OPTIONS
         self._attr_icon = "mdi:ev-station"
 
+    def _target_load_gid(self, data: ChargerDevice) -> int:
+        return resolve_charger_load_gid(self._device, data, self._device_gid)
+
     @property
-    def native_value(self) -> str:
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        if not super().available:
+            return False
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        return not (data is None or is_charger_offline(data))
+
+    @property
+    def native_value(self) -> str | None:
         """Return the human-friendly charger status."""
         data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
         if data:
-            state, _ = _map_charger_state(data.status, data.message, data.fault_text)
+            state, _ = evaluate_iec_charger_status(data)
             return state
-        return "Unknown"
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return IEC code and raw Emporia values as attributes."""
+        """Return canonical operational, IEC, and session attributes."""
         attrs = dict(super().extra_state_attributes or {})
         data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
-        if data:
-            _, iec_code = _map_charger_state(data.status, data.message, data.fault_text)
-            attrs.update(
-                {
-                    "iec_status": iec_code,
-                    "raw_status": data.status,
-                    "raw_message": data.message,
-                    "fault_text": data.fault_text,
-                }
-            )
+        if not data:
+            return attrs
+
+        excess_enabled, _ = resolve_excess_solar_participation(
+            self.coordinator.data,
+            self._device_information,
+            self._target_load_gid(data),
+            int(self._device_gid),
+            fallback_holder=data,
+        )
+
+        _, iec_code = evaluate_iec_charger_status(data)
+        substatus = evaluate_charger_substatus(data, excess_enabled)
+
+        evse_control = getattr(data, "evse_control", None)
+
+        attrs.update(
+            {
+                "iec_status": iec_code,
+                "raw_status": resolve_effective_charger_status(data) or data.status,
+                "raw_message": data.message,
+                "substatus": substatus,
+                "session_active": bool(getattr(evse_control, "session_active", False))
+                if evse_control is not None
+                else False,
+            }
+        )
+
+        if data.fault_text:
+            attrs["fault_text"] = data.fault_text
+        if evse_control is not None:
+            if getattr(evse_control, "fault_code", None) is not None:
+                attrs["fault_code"] = evse_control.fault_code
+            if getattr(evse_control, "active_charging_minutes", None) is not None:
+                attrs["active_charging_minutes"] = evse_control.active_charging_minutes
+
         return attrs
 
     @property

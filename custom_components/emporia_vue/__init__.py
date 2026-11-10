@@ -15,11 +15,12 @@ import requests
 import voluptuous as vol
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import Event, HomeAssistant, State, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryNotReady,
     HomeAssistantError,
+    ServiceValidationError,
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -37,6 +38,7 @@ from pyemvue.device import (
 )
 from pyemvue.enums import Scale, Unit
 
+from .charger_entity import resolve_charger_device_id
 from .cognito_compat import apply_cognito_compat
 from .const import (
     AUTH_METHOD,
@@ -938,6 +940,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         data[str(outlet.device_gid)] = outlet
                 if chargers:
                     for charger in chargers:
+                        charger.evse_control = None
+                        if hasattr(vue, "get_evse_control"):
+                            dev_id = resolve_charger_device_id(
+                                DEVICE_INFORMATION.get(charger.device_gid),
+                                charger,
+                                charger.device_gid,
+                            )
+                            try:
+                                charger.evse_control = (
+                                    await hass.async_add_executor_job(
+                                        vue.get_evse_control, dev_id
+                                    )
+                                )
+                            except Exception as err:  # noqa: BLE001
+                                _LOGGER.debug(
+                                    "Failed to fetch EVSE control status for %s: %s",
+                                    dev_id,
+                                    err,
+                                )
                         data[str(charger.device_gid)] = charger
                 return data
             except Exception as err:
@@ -965,8 +986,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 str(call.service),
                 str(call.data),
             )
-            current = call.data.get("current")
-            current = int(current)
+            raw_current = call.data.get("current")
+            if raw_current is None:
+                raise ServiceValidationError("Charging current is required.")
+            try:
+                current = int(raw_current)
+            except (TypeError, ValueError) as err:
+                raise ServiceValidationError(
+                    f"Invalid charging current: {raw_current}"
+                ) from err
+
             device_id: str | list[str] | None = call.data.get("device_id", None)
             entity_id: str | list[str] | None = call.data.get("entity_id", None)
 
@@ -994,12 +1023,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             elif entity_id:
                 charger_entity = entity_registry.async_get(entity_id[0])
             if not charger_entity:
-                raise HomeAssistantError("Target device or Entity required.")
+                raise ServiceValidationError("Target device or Entity required.")
 
             unique_entity_id: str = charger_entity.unique_id
             gid_match: re.Match[str] | None = re.search(r"\d+", unique_entity_id)
             if not gid_match:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find device gid from unique id {unique_entity_id}"
                 )
 
@@ -1008,7 +1037,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 charger_gid not in DEVICE_INFORMATION
                 or not DEVICE_INFORMATION[charger_gid].ev_charger
             ):
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     "Set Charging Current called on invalid device with entity id"
                     f" {charger_entity.entity_id} (unique id {unique_entity_id})"
                 )
@@ -1016,46 +1045,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             state = hass.states.get(charger_entity.entity_id)
             _LOGGER.info("State is %s", str(state))
             if not state:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find state for entity {charger_entity.entity_id}"
                 )
             charger_info: VueDevice = DEVICE_INFORMATION[charger_gid]
             if charger_info.ev_charger is None:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find charger info for device {charger_gid}"
                 )
             # Scale the current to a minimum of 6 amps and max of the circuit max
-            current: int = max(6, current)
+            current = max(6, current)
             current = min(current, charger_info.ev_charger.max_charging_rate)
             _LOGGER.info(
                 "Setting charger %s to current of %d amps", charger_gid, current
             )
 
             try:
-                updated_charger: ChargerDevice = await loop.run_in_executor(
-                    None,
-                    vue.update_charger,
-                    charger_info.ev_charger,
-                    state.state == "on",
-                    current,
+                dev_id = resolve_charger_device_id(
+                    charger_info, charger_info.ev_charger, charger_gid
                 )
-                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
-                # update the state of the charger entity using the updated data
-                state: State | None = hass.states.get(charger_entity.entity_id)
-                if state:
-                    new_state: str = "on" if updated_charger.charger_on else "off"
-                    new_attributes: dict = state.attributes.copy()
-                    new_attributes["charging_rate"] = updated_charger.charging_rate
-                    # good enough for now, update the state in the registry
-                    hass.states.async_set(
-                        charger_entity.entity_id, new_state, new_attributes
+                if hasattr(vue, "set_evse_settings"):
+                    await loop.run_in_executor(
+                        None,
+                        vue.set_evse_settings,
+                        dev_id,
+                        current,
                     )
+                else:
+                    await loop.run_in_executor(
+                        None,
+                        vue.update_charger,
+                        charger_info.ev_charger,
+                        state.state == "on",
+                        current,
+                    )
+                if coordinator_device_status:
+                    await coordinator_device_status.async_request_refresh()
 
             except requests.exceptions.HTTPError as err:
                 _LOGGER.error(
                     "Error updating charger status: %s \nResponse body: %s",
                     err,
-                    err.response.text,
+                    err.response.text
+                    if getattr(err, "response", None) is not None
+                    else "",
                 )
                 raise
 
