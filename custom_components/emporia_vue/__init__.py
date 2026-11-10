@@ -207,8 +207,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
+        if hasattr(vue, "get_devices_v1"):
+            devices: list[VueDevice] = await loop.run_in_executor(
+                None, vue.get_devices_v1
+            )
+        else:
+            devices: list[VueDevice] = await loop.run_in_executor(
+                None, vue.get_devices
+            )
         for device in devices:
+            for channel in device.channels:
+                if not channel.device_gid:
+                    channel.device_gid = device.device_gid
             if str(device.device_gid) not in DEVICE_GIDS:
                 DEVICE_GIDS.append(str(device.device_gid))
                 _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
