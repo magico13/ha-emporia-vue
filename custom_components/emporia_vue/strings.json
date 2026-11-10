@@ -94,6 +94,15 @@
       },
       "mains_voltage_minute_average": {
         "name": "Mains {leg} voltage minute average"
+      },
+      "session_energy": {
+        "name": "Session energy"
+      },
+      "charging_current": {
+        "name": "Charging current"
+      },
+      "charging_power": {
+        "name": "Charging power"
       }
     }
   },

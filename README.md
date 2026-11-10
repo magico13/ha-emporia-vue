@@ -61,10 +61,11 @@ The integration provides native line-level voltage and power sensors attached to
 - **3-Phase Systems (International / Commercial):** Exposes `Mains A`, `Mains B`, and `Mains C` voltage and power sensors for 230V/400V wye or delta installations.
 - **Merged Circuits:** User-configured combined circuits (e.g. `Merged_100`) cleanly nest under their parent monitor.
 
-#### EV Charger Controls
+#### EV Charger Controls & Session Telemetry
 
-Emporia EV Chargers (EVSE) feature modernized V1 controls:
+Emporia EV Chargers (EVSE) feature modernized V1 controls and live session telemetry:
 - **Controls:** Direct charging enable/disable switch and charging current limit slider (in Amps).
+- **Session Energy:** Dedicated `Session energy` sensor (`sensor.<charger>_session_energy`) tracking total kWh delivered during the current or most recent charge cycle.
 - **Session Attributes:** Enriched attributes on `sensor.<charger>_charger_status` reporting session cost, active charging duration, vehicle plug-in timestamp, and pilot offered current.
 
 ### API Diagnostics

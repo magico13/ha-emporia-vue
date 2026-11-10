@@ -11,6 +11,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfPower,
@@ -151,6 +152,21 @@ async def async_setup_entry(
                         dev,
                         device_information,
                         site_map=site_map,
+                    )
+                )
+                charger_sensors.append(
+                    EmporiaChargerSessionEnergySensor(
+                        coordinator_device_status, dev, site_map=site_map
+                    )
+                )
+                charger_sensors.append(
+                    EmporiaChargerCurrentSensor(
+                        coordinator_device_status, dev, site_map=site_map
+                    )
+                )
+                charger_sensors.append(
+                    EmporiaChargerPowerSensor(
+                        coordinator_device_status, dev, site_map=site_map
                     )
                 )
         if charger_sensors:
@@ -646,6 +662,185 @@ class EmporiaChargerStatusSensor(
     def unique_id(self) -> str:
         """Unique ID for the charger status sensor."""
         return f"emporia_vue.charger_status_{self._device_gid}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
+        )
+
+
+class EmporiaChargerSessionEnergySensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
+    """Representation of an Emporia Charger session energy sensor."""
+
+    def __init__(
+        self,
+        coordinator,
+        device: VueDevice,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
+        """Initialize the session energy sensor."""
+        super().__init__(coordinator)
+        self._device = device
+        self._device_gid = str(device.device_gid)
+        self._explicit_site_map = site_map
+        self._attr_has_entity_name = True
+        self._attr_name = "Session energy"
+        self._attr_translation_key = "session_energy"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_icon = "mdi:lightning-bolt"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the energy delivered in the active or most recent session."""
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        if data:
+            evse_control = getattr(data, "evse_control", None)
+            if (
+                evse_control is not None
+                and getattr(evse_control, "energy_delivered", None) is not None
+            ):
+                return float(evse_control.energy_delivered)
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        """Unique ID for the session energy sensor."""
+        return f"sensor.emporia_vue.session_energy.{self._device_gid}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
+        )
+
+
+class EmporiaChargerCurrentSensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
+    """Representation of an Emporia Charger real-time charging current sensor."""
+
+    def __init__(
+        self,
+        coordinator,
+        device: VueDevice,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
+        """Initialize the charging current sensor."""
+        super().__init__(coordinator)
+        self._device = device
+        self._device_gid = str(device.device_gid)
+        self._explicit_site_map = site_map
+        self._attr_has_entity_name = True
+        self._attr_name = "Charging current"
+        self._attr_translation_key = "charging_current"
+        self._attr_device_class = SensorDeviceClass.CURRENT
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+        self._attr_suggested_display_precision = 0
+        self._attr_icon = "mdi:current-ac"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the real-time vehicle current draw in amps."""
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        if data:
+            evse_control = getattr(data, "evse_control", None)
+            if evse_control is not None:
+                rate = getattr(evse_control, "charging_rate_amps", None)
+                if rate is not None:
+                    return round(float(rate))
+            return 0
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        """Unique ID for the charging current sensor."""
+        return f"sensor.emporia_vue.charging_current.{self._device_gid}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
+            model=self._device.model,
+            sw_version=self._device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
+        )
+
+
+class EmporiaChargerPowerSensor(
+    EmporiaLocationEntityMixin, CoordinatorEntity, SensorEntity
+):  # type: ignore
+    """Representation of an Emporia Charger real-time charging power sensor."""
+
+    def __init__(
+        self,
+        coordinator,
+        device: VueDevice,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
+        """Initialize the charging power sensor."""
+        super().__init__(coordinator)
+        self._device = device
+        self._device_gid = str(device.device_gid)
+        self._explicit_site_map = site_map
+        self._attr_has_entity_name = True
+        self._attr_name = "Charging power"
+        self._attr_translation_key = "charging_power"
+        self._attr_device_class = SensorDeviceClass.POWER
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+        self._attr_suggested_display_precision = 2
+        self._attr_icon = "mdi:lightning-bolt"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the real-time vehicle power draw in kilowatts."""
+        data: ChargerDevice | None = self.coordinator.data.get(self._device_gid)
+        if data:
+            evse_control = getattr(data, "evse_control", None)
+            if evse_control is not None:
+                rate_kw = getattr(evse_control, "charging_rate_kw", None)
+                if rate_kw is not None:
+                    return round(float(rate_kw), 3)
+            return 0.0
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        """Unique ID for the charging power sensor."""
+        return f"sensor.emporia_vue.charging_power.{self._device_gid}"
 
     @property
     def device_info(self) -> DeviceInfo:
