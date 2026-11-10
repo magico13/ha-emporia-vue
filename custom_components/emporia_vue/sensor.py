@@ -1,10 +1,7 @@
 """Platform for sensor integration."""
 
-from datetime import datetime
 import logging
-
-from pyemvue.device import VueDevice, VueDeviceChannel, ChargerDevice
-from pyemvue.enums import Scale
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -17,7 +14,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from pyemvue.device import ChargerDevice, VueDevice, VueDeviceChannel
+from pyemvue.enums import Scale
 
+from . import determine_circuit_model
 from .const import DOMAIN
 from .resilience import TolerantUpdateMethod
 
@@ -39,22 +39,39 @@ async def async_setup_entry(
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
 
+    def _is_channel_active(coordinator, identifier: str) -> bool:
+        if not coordinator or not coordinator.data:
+            return False
+        channel_data = coordinator.data.get(identifier)
+        if not channel_data:
+            return False
+        device = channel_data.get("info")
+        channel_num = channel_data.get("channel_num")
+        if device and device.channels:
+            for ch in device.channels:
+                if ch.channel_num == channel_num:
+                    return ch.has_data is not False
+        return True
+
     if coordinator_1min:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1min, identifier)
-            for _, identifier in enumerate(coordinator_1min.data)
+            for identifier in coordinator_1min.data
+            if _is_channel_active(coordinator_1min, identifier)
         )
 
     if coordinator_1mon:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_1mon, identifier)
-            for _, identifier in enumerate(coordinator_1mon.data)
+            for identifier in coordinator_1mon.data
+            if _is_channel_active(coordinator_1mon, identifier)
         )
 
     if coordinator_day_sensor:
         async_add_entities(
             CurrentVuePowerSensor(coordinator_day_sensor, identifier)
-            for _, identifier in enumerate(coordinator_day_sensor.data)
+            for identifier in coordinator_day_sensor.data
+            if _is_channel_active(coordinator_day_sensor, identifier)
         )
 
     retry_update_methods: dict[str, TolerantUpdateMethod] = hass.data[DOMAIN][
@@ -78,9 +95,12 @@ async def async_setup_entry(
     ]
     if coordinator_device_status and coordinator_device_status.data:
         async_add_entities(
-            EmporiaChargerStatusSensor(coordinator_device_status, device_information[int(gid)])
+            EmporiaChargerStatusSensor(
+                coordinator_device_status, device_information[int(gid)]
+            )
             for gid in coordinator_device_status.data
-            if int(gid) in device_information and device_information[int(gid)].ev_charger
+            if int(gid) in device_information
+            and device_information[int(gid)].ev_charger
         )
 
 
@@ -130,8 +150,15 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     @property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
-        device_name = self._channel.name
-        if not device_name:
+        monitor_name = (
+            self._device.device_name
+            or self._device.display_name
+            or self._device.model
+            or f"Vue Device {self._device.device_gid}"
+        )
+        if self._channel.name:
+            device_name = self._channel.name
+        else:
             # An unnamed *numbered* channel is a CT that has not been configured
             # in the Emporia app. Falling back to the monitor's name gives every
             # such channel an identical name, so a Vue with spare channels shows
@@ -139,20 +166,41 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             # Aggregate channels ("1,2,3", MainsFromGrid, Balance, ...) legitimately
             # represent the monitor itself, so those keep the monitor's name.
             if self._channel.channel_num.isdigit():
-                device_name = (
-                    f"{self._device.device_name} Circuit {self._channel.channel_num}"
-                )
+                device_name = f"{monitor_name} circuit {self._channel.channel_num}"
             else:
-                device_name = self._device.device_name
-        return DeviceInfo(
+                device_name = monitor_name
+
+        if self._channel.channel_num == "1,2,3":
+            return DeviceInfo(
+                identifiers={(DOMAIN, f"{self._device.device_gid}-1,2,3")},
+                name=self._device.device_name
+                or self._device.display_name
+                or self._device.model,
+                model=self._device.model,
+                sw_version=self._device.firmware,
+                manufacturer="Emporia",
+                serial_number=str(self._device.manufacturer_id)
+                if self._device.manufacturer_id
+                else None,
+            )
+
+        dev_info = DeviceInfo(
             identifiers={
                 (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
             },
             name=device_name,
-            model=self._device.model,
+            model=determine_circuit_model(self._channel),
+            model_id=None,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
         )
+        if not self._channel.name and self._channel.channel_num.isdigit():
+            dev_info["translation_key"] = "circuit"
+            dev_info["translation_placeholders"] = {
+                "device_name": monitor_name,
+                "channel_number": str(self._channel.channel_num),
+            }
+        return dev_info
 
     @property
     def last_reset(self) -> datetime | None:
@@ -172,14 +220,13 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     @property
     def unique_id(self) -> str:
         """Return the Unique ID for the sensor."""
+        device_gid = self._channel.device_gid or self._device.device_gid
         if self._scale == Scale.MINUTE.value:
             return (
-                "sensor.emporia_vue.instant."
-                f"{self._channel.device_gid}-{self._channel.channel_num}"
+                f"sensor.emporia_vue.instant.{device_gid}-{self._channel.channel_num}"
             )
         return (
-            f"sensor.emporia_vue.{self._scale}."
-            f"{self._channel.device_gid}-{self._channel.channel_num}"
+            f"sensor.emporia_vue.{self._scale}.{device_gid}-{self._channel.channel_num}"
         )
 
     def scale_usage(self, usage):
@@ -337,14 +384,23 @@ class EmporiaApiLatencySensor(EmporiaUpdateTelemetrySensor):
 #             "EV is not accepting charge", "Connected to EV",
 #             "Please Wait", "Charging Halted", ""
 
-def _map_charger_state(status: str | None, message: str | None, fault_text: str | None) -> tuple[str, str]:
+
+def _map_charger_state(
+    status: str | None, message: str | None, fault_text: str | None
+) -> tuple[str, str]:
     """Map Emporia charger status/message to a human-friendly state and IEC 61851 code."""
     status_lower = (status or "").lower()
     message_lower = (message or "").lower()
     fault = (fault_text or "").strip()
 
     # F: Fault condition
-    if fault or "error" in status_lower or "fault" in status_lower or "error" in message_lower or "fault" in message_lower:
+    if (
+        fault
+        or "error" in status_lower
+        or "fault" in status_lower
+        or "error" in message_lower
+        or "fault" in message_lower
+    ):
         return "Error", "F"
     # C: Actively charging
     if status_lower == "charging":
@@ -354,17 +410,21 @@ def _map_charger_state(status: str | None, message: str | None, fault_text: str 
         return "Disconnected", "A"
     if status_lower == "devicenotconnected":
         return "Disconnected", "A"
-    if status_lower == "standby" and message_lower in ("ready", "off", "self test", "please wait"):
+    if status_lower == "standby" and message_lower in (
+        "ready",
+        "off",
+        "self test",
+        "please wait",
+    ):
         return "Disconnected", "A"
     # B: Connected but not charging (default for unknown/unmapped states)
     if status_lower != "standby":
-        _LOGGER.debug(
-            "Unmapped charger state: status=%s, message=%s", status, message
-        )
+        _LOGGER.debug("Unmapped charger state: status=%s, message=%s", status, message)
     return "Connected", "B"
 
 
 CHARGER_STATUS_OPTIONS = ["Disconnected", "Connected", "Charging", "Error"]
+
 
 class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     """Representation of an Emporia Charger status sensor."""
@@ -414,8 +474,13 @@ class EmporiaChargerStatusSensor(CoordinatorEntity, SensorEntity):  # type: igno
         """Return the device information."""
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self._device_gid}-1,2,3")},
-            name=self._device.device_name,
+            name=self._device.device_name
+            or self._device.display_name
+            or self._device.model,
             model=self._device.model,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
         )
