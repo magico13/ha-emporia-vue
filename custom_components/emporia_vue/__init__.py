@@ -854,6 +854,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         data[str(outlet.device_gid)] = outlet
                 if chargers:
                     for charger in chargers:
+                        charger.evse_control = None
+                        if hasattr(vue, "get_evse_control"):
+                            dev_id = (
+                                getattr(charger, "device_id", None)
+                                or getattr(
+                                    DEVICE_INFORMATION.get(charger.device_gid),
+                                    "manufacturer_id",
+                                    None,
+                                )
+                                or str(charger.device_gid)
+                            )
+                            try:
+                                charger.evse_control = (
+                                    await hass.async_add_executor_job(
+                                        vue.get_evse_control, dev_id
+                                    )
+                                )
+                            except Exception as err:  # noqa: BLE001
+                                _LOGGER.debug(
+                                    "Failed to fetch EVSE control status for %s: %s",
+                                    dev_id,
+                                    err,
+                                )
                         data[str(charger.device_gid)] = charger
                 return data
             except Exception as err:
@@ -948,14 +971,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
             try:
-                updated_charger: ChargerDevice = await loop.run_in_executor(
-                    None,
-                    vue.update_charger,
-                    charger_info.ev_charger,
-                    state.state == "on",
-                    current,
+                dev_id = (
+                    getattr(charger_info.ev_charger, "device_id", None)
+                    or getattr(charger_info, "manufacturer_id", None)
+                    or str(charger_gid)
                 )
-                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
+                if hasattr(vue, "set_evse_settings"):
+                    await loop.run_in_executor(
+                        None,
+                        vue.set_evse_settings,
+                        dev_id,
+                        current,
+                    )
+                    charger_info.ev_charger.charging_rate = current
+                    updated_charger = charger_info.ev_charger
+                else:
+                    updated_charger = await loop.run_in_executor(
+                        None,
+                        vue.update_charger,
+                        charger_info.ev_charger,
+                        state.state == "on",
+                        current,
+                    )
+                    DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
                 # update the state of the charger entity using the updated data
                 state: State | None = hass.states.get(charger_entity.entity_id)
                 if state:
@@ -966,12 +1004,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     hass.states.async_set(
                         charger_entity.entity_id, new_state, new_attributes
                     )
+                if coordinator_device_status:
+                    await coordinator_device_status.async_request_refresh()
 
             except requests.exceptions.HTTPError as err:
                 _LOGGER.error(
                     "Error updating charger status: %s \nResponse body: %s",
                     err,
-                    err.response.text,
+                    getattr(err.response, "text", "")
+                    if hasattr(err, "response")
+                    else "",
                 )
                 raise
 

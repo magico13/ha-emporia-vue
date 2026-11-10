@@ -1,5 +1,7 @@
 """Platform for switch integration."""
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -14,9 +16,12 @@ from homeassistant.helpers.update_coordinator import (
 )
 from pyemvue import PyEmVue
 from pyemvue.device import VueDevice
-from requests import exceptions
 
-from .charger_entity import EmporiaChargerEntity, EmporiaLocationEntityMixin
+from .charger_entity import (
+    EmporiaChargerEntity,
+    EmporiaLocationEntityMixin,
+    evaluate_charger_switch_is_on,
+)
 from .const import DOMAIN, VUE_DATA
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -142,6 +147,28 @@ class EmporiaOutletSwitch(EmporiaLocationEntityMixin, CoordinatorEntity, SwitchE
 class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
     """Representation of an Emporia Charger switch state."""
 
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        vue: PyEmVue,
+        device: VueDevice,
+        units: str | None = None,
+        device_class: str | None = SwitchDeviceClass.OUTLET,
+        site_map: dict[int, Any] | None = None,
+    ) -> None:
+        """Initialize the charger switch."""
+        super().__init__(
+            coordinator=coordinator,
+            vue=vue,
+            device=device,
+            units=units,
+            device_class=device_class,
+            site_map=site_map,
+        )
+        self._attr_has_entity_name = True
+        self._attr_name = None
+        self._attr_icon = "mdi:ev-station"
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the charger on."""
         await self._update_switch(True)
@@ -153,23 +180,43 @@ class EmporiaChargerSwitch(EmporiaChargerEntity, SwitchEntity):  # type: ignore
     @property
     def is_on(self) -> bool:
         """Return the state of the switch."""
-        return self.coordinator.data[self._device_gid].charger_on
+        charger = (
+            self.coordinator.data.get(self._device_gid)
+            if self.coordinator and self.coordinator.data
+            else None
+        )
+        return evaluate_charger_switch_is_on(charger)
 
     async def _update_switch(self, on: bool) -> None:
         """Update the switch."""
+        charger_data = (
+            self.coordinator.data.get(self._device_gid)
+            if self.coordinator and self.coordinator.data
+            else None
+        )
+        dev_id = self.device_id
+
         try:
-            await self.hass.async_add_executor_job(
-                self._vue.update_charger,
-                self.coordinator.data[self._device_gid],
-                on,
-            )
-        except exceptions.HTTPError as err:
+            if hasattr(self._vue, "set_evse_state"):
+                await self.hass.async_add_executor_job(
+                    self._vue.set_evse_state,
+                    dev_id,
+                    on,
+                )
+            else:
+                await self.hass.async_add_executor_job(
+                    self._vue.update_charger,
+                    charger_data,
+                    on,
+                )
+        except Exception as err:
             _LOGGER.error(
                 "Error updating charger status: %s \nResponse body: %s",
                 err,
-                err.response.text,
+                getattr(getattr(err, "response", None), "text", ""),
             )
             raise
+
         await self.coordinator.async_request_refresh()
 
     def turn_on(self, **kwargs: Any) -> None:
