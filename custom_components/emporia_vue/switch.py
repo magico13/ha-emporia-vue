@@ -3,10 +3,6 @@
 import logging
 from typing import Any
 
-from pyemvue import PyEmVue
-from pyemvue.device import VueDevice
-from requests import exceptions
-
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -16,8 +12,11 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from pyemvue import PyEmVue
+from pyemvue.device import VueDevice
+from requests import exceptions
 
-from .charger_entity import EmporiaChargerEntity
+from .charger_entity import EmporiaChargerEntity, EmporiaLocationEntityMixin
 from .const import DOMAIN, VUE_DATA
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -30,12 +29,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up the switch platform."""
     vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
+    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][
+        config_entry.entry_id
+    ]["coordinator_device_status"]
     device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
         "device_information"
     ]
+    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
+        "site_map", {}
+    )
 
     if coordinator is None or coordinator.data is None:
         return
@@ -46,8 +48,12 @@ async def async_setup_entry(
         if int_gid not in device_information:
             continue
         device = device_information[int_gid]
+        if device.channels and all(ch.has_data is False for ch in device.channels):
+            continue
         if device.outlet:
-            switches.append(EmporiaOutletSwitch(coordinator, vue, gid, device))
+            switches.append(
+                EmporiaOutletSwitch(coordinator, vue, gid, device, site_map=site_map)
+            )
         elif device.ev_charger:
             switches.append(
                 EmporiaChargerSwitch(
@@ -56,13 +62,14 @@ async def async_setup_entry(
                     device,
                     None,
                     SwitchDeviceClass.OUTLET,
+                    site_map=site_map,
                 )
             )
 
     async_add_entities(switches)
 
 
-class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
+class EmporiaOutletSwitch(EmporiaLocationEntityMixin, CoordinatorEntity, SwitchEntity):  # type: ignore
     """Representation of an Emporia Smart Outlet state."""
 
     def __init__(
@@ -71,12 +78,14 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
         vue: PyEmVue,
         gid: str,
         device: VueDevice,
+        site_map: dict[int, Any] | None = None,
     ) -> None:
         """Pass coordinator to CoordinatorEntity."""
         super().__init__(coordinator)
         self._vue = vue
         self._device_gid = gid
         self._device: VueDevice = device
+        self._explicit_site_map = site_map
         self._attr_has_entity_name = True
         self._attr_name = None
         self._attr_device_class = SwitchDeviceClass.OUTLET
@@ -106,6 +115,9 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
             model=self._device.model,
             sw_version=self._device.firmware,
             manufacturer="Emporia",
+            serial_number=str(self._device.manufacturer_id)
+            if self._device.manufacturer_id
+            else None,
         )
 
     @property
