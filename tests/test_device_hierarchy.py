@@ -18,6 +18,7 @@ from custom_components.emporia_vue.sensor import (
 )
 from custom_components.emporia_vue.switch import EmporiaOutletSwitch
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pyemvue.device import ChargerDevice, OutletDevice, VueDevice, VueDeviceChannel
@@ -860,3 +861,59 @@ async def test_pass_2b_links_existing_unused_cts_via_device_id(
     assert updated_ct.via_device_id == home_dev.id
     # User customization must be strictly preserved
     assert updated_ct.name_by_user == "x4 Garage"
+
+
+async def test_async_remove_config_entry_device(
+    hass: HomeAssistant, emporia_devices: dict[int, VueDevice]
+) -> None:
+    """Test async_remove_config_entry_device allows deleting inactive/orphaned devices and protects active ones."""
+    from custom_components.emporia_vue import async_remove_config_entry_device
+
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="test_remove_device_entry")
+    entry.add_to_hass(hass)
+
+    # 1001-1 is active (has_data=True), 1001-4 is inactive (has_data=False)
+    emporia_devices[1001].channels[0].has_data = True
+    emporia_devices[1001].channels[3].has_data = False
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "device_information": emporia_devices,
+    }
+
+    dev_reg = dr.async_get(hass)
+
+    # 1. Main panel monitor device: MUST NOT be removable (raises HomeAssistantError)
+    monitor_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-1,2,3")},
+    )
+    with pytest.raises(
+        HomeAssistantError,
+        match="Cannot remove active device '.*'. Only inactive or decommissioned devices can be deleted.",
+    ):
+        await async_remove_config_entry_device(hass, entry, monitor_dev)
+
+    # 2. Active circuit device: MUST NOT be removable (raises HomeAssistantError)
+    active_ct_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-1")},
+    )
+    with pytest.raises(
+        HomeAssistantError,
+        match="Cannot remove active device '.*'. Only inactive or decommissioned devices can be deleted.",
+    ):
+        await async_remove_config_entry_device(hass, entry, active_ct_dev)
+
+    # 3. Inactive circuit device (has_data=False): MUST be removable
+    inactive_ct_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-4")},
+    )
+    assert await async_remove_config_entry_device(hass, entry, inactive_ct_dev) is True
+
+    # 4. Orphaned legacy circuit device (e.g. 1001-97, not in cloud): MUST be removable
+    orphaned_dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "1001-97")},
+    )
+    assert await async_remove_config_entry_device(hass, entry, orphaned_dev) is True

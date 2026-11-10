@@ -954,6 +954,30 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow deleting inactive or orphaned devices from the device registry."""
+    vue_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    device_info_map: dict[int, VueDevice] = vue_data.get("device_information", {})
+
+    active_idents: set[str] = set()
+    for dev in device_info_map.values():
+        active_idents.add(f"{dev.device_gid}-1,2,3")
+        for ch in getattr(dev, "channels", []):
+            if getattr(ch, "has_data", None) is not False:
+                active_idents.add(f"{dev.device_gid}-{ch.channel_num}")
+
+    for dom, ident in device_entry.identifiers:
+        if dom == DOMAIN and ident in active_idents:
+            dev_name = device_entry.name_by_user or device_entry.name or "device"
+            raise HomeAssistantError(
+                f"Cannot remove active device '{dev_name}'. Only inactive or decommissioned devices can be deleted."
+            )
+
+    return True
+
+
 async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
     """Fetch data from API endpoint."""
     try:
