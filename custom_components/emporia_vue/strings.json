@@ -72,15 +72,37 @@
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
     }
   },
+  "device": {
+    "circuit": {
+      "name": "{device_name} circuit {channel_number}"
+    }
+  },
   "entity": {
     "number": {
       "charge_current_limit": {
-        "name": "Current Limit"
+        "name": "Current limit"
       }
     },
     "sensor": {
       "charger_status": {
-        "name": "Status"
+        "name": "Status",
+        "state_attributes": {
+          "iec_status": {
+            "name": "IEC status"
+          }
+        }
+      },
+      "mains_voltage_minute_average": {
+        "name": "Mains {leg} voltage minute average"
+      },
+      "session_energy": {
+        "name": "Session energy"
+      },
+      "charging_current": {
+        "name": "Charging current"
+      },
+      "charging_power": {
+        "name": "Charging power"
       }
     }
   },
