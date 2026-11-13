@@ -1,9 +1,8 @@
 """Constants for the Emporia Vue integration."""
 
-import voluptuous as vol
-
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
 DOMAIN = "emporia_vue"
 VUE_DATA = "vue_data"
