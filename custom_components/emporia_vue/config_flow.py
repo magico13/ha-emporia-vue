@@ -34,6 +34,7 @@ from .const import (
     ENABLE_1M,
     ENABLE_1MON,
     SOLAR_INVERT,
+    SYNC_CIRCUIT_NAMES,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
 from .oauth import EmporiaOAuth2Implementation
@@ -111,6 +112,8 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
 
     if SOLAR_INVERT not in new_data:
         new_data[SOLAR_INVERT] = True
+    if SYNC_CIRCUIT_NAMES not in new_data:
+        new_data[SYNC_CIRCUIT_NAMES] = True
     if AUTH_METHOD not in new_data:
         new_data[AUTH_METHOD] = AUTH_METHOD_EMAIL_PASSWORD
 
@@ -122,6 +125,7 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
         SOLAR_INVERT: new_data[SOLAR_INVERT],
+        SYNC_CIRCUIT_NAMES: new_data[SYNC_CIRCUIT_NAMES],
         AUTH_METHOD: new_data[AUTH_METHOD],
     }
     if new_data[AUTH_METHOD] == AUTH_METHOD_TOKENS:
@@ -191,7 +195,13 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         options = vol.Schema(CONFIG_OPTIONS_SCHEMA)({})
         if self.source == config_entries.SOURCE_REAUTH:
             existing_entry = self._get_reauth_entry()
-            options.update({key: existing_entry.data[key] for key in options})
+            options.update(
+                {
+                    key: existing_entry.data[key]
+                    for key in options
+                    if key in existing_entry.data
+                }
+            )
         try:
             info = await validate_input(
                 {
@@ -319,6 +329,10 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 ENABLE_1D: user_input[ENABLE_1D],
                 ENABLE_1MON: user_input[ENABLE_1MON],
                 SOLAR_INVERT: user_input[SOLAR_INVERT],
+                SYNC_CIRCUIT_NAMES: user_input.get(
+                    SYNC_CIRCUIT_NAMES,
+                    current_config.data.get(SYNC_CIRCUIT_NAMES, True),
+                ),
                 CUSTOMER_GID: info[CUSTOMER_GID],
                 CONFIG_TITLE: info[CONFIG_TITLE],
             }
@@ -343,6 +357,10 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             vol.Optional(
                 SOLAR_INVERT,
                 default=current_config.data.get(SOLAR_INVERT, True),
+            ): cv.boolean,
+            vol.Optional(
+                SYNC_CIRCUIT_NAMES,
+                default=current_config.data.get(SYNC_CIRCUIT_NAMES, True),
             ): cv.boolean,
         }
 

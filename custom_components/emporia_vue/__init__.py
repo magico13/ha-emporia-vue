@@ -61,6 +61,7 @@ from .const import (
     ENABLE_1M,
     ENABLE_1MON,
     SOLAR_INVERT,
+    SYNC_CIRCUIT_NAMES,
     VUE_DATA,
 )
 from .resilience import TolerantUpdateMethod, is_newer_sample
@@ -390,6 +391,8 @@ def async_setup_device_registry(
 ) -> None:
     """Register physical devices and CT circuit sub-devices in device registry."""
     dev_reg = dr.async_get(hass)
+    entry_config = {**(entry.data or {}), **(entry.options or {})}
+    sync_names = bool(entry_config.get(SYNC_CIRCUIT_NAMES, True))
 
     def _lookup_device_entry(ident: tuple[str, str]) -> dr.DeviceEntry | None:
         """Lookup device entry by identifier respecting Core 2026+ standards."""
@@ -411,10 +414,22 @@ def async_setup_device_registry(
             else None
         )
         device_name = _resolve_device_name(device)
+        phys_ident = (DOMAIN, f"{device.device_gid}-1,2,3")
+        existing_phys = _lookup_device_entry(phys_ident)
+        phys_name = device_name
+        if (
+            existing_phys is not None
+            and (not sync_names or existing_phys.name_by_user is not None)
+            and existing_phys.name
+        ):
+            phys_name = existing_phys.name
+            if not sync_names:
+                device.device_name = existing_phys.name
+
         child_dev = dev_reg.async_get_or_create(
             config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, f"{device.device_gid}-1,2,3")},
-            name=device_name,
+            identifiers={phys_ident},
+            name=phys_name,
             model=device.model,
             sw_version=device.firmware,
             manufacturer="Emporia",
@@ -423,6 +438,15 @@ def async_setup_device_registry(
             else None,
             via_device_id=parent_entry.id if parent_entry else None,
         )
+        if (
+            sync_names
+            and child_dev.name_by_user is None
+            and phys_name
+            and child_dev.name != phys_name
+        ):
+            child_dev = (
+                dev_reg.async_update_device(child_dev.id, name=phys_name) or child_dev
+            )
         sync_child_device_disabled_state(dev_reg, child_dev, parent_entry)
 
     # Pass 2: CT Circuit Sub-Devices
@@ -454,9 +478,22 @@ def async_setup_device_registry(
                 else:
                     circuit_name = f"{device_name} {channel.channel_num}"
 
+            ct_ident = (DOMAIN, f"{device.device_gid}-{channel.channel_num}")
+            existing_ct = _lookup_device_entry(ct_ident)
+            if (
+                existing_ct is not None
+                and (not sync_names or existing_ct.name_by_user is not None)
+                and existing_ct.name
+            ):
+                circuit_name = existing_ct.name
+                translation_key = None
+                translation_placeholders = None
+                if not sync_names and channel.name:
+                    channel.name = existing_ct.name
+
             ct_dev = dev_reg.async_get_or_create(
                 config_entry_id=entry.entry_id,
-                identifiers={(DOMAIN, f"{device.device_gid}-{channel.channel_num}")},
+                identifiers={ct_ident},
                 name=circuit_name,
                 model=determine_circuit_model(channel, device),
                 model_id=None,
@@ -466,6 +503,15 @@ def async_setup_device_registry(
                 translation_key=translation_key,
                 translation_placeholders=translation_placeholders,
             )
+            if (
+                sync_names
+                and ct_dev.name_by_user is None
+                and circuit_name
+                and ct_dev.name != circuit_name
+            ):
+                ct_dev = (
+                    dev_reg.async_update_device(ct_dev.id, name=circuit_name) or ct_dev
+                )
             sync_child_device_disabled_state(dev_reg, ct_dev, parent_entry)
 
     # Pass 2b: Link existing unlinked sub-devices to their parent monitor via_device_id
@@ -617,6 +663,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
                 SOLAR_INVERT: conf[SOLAR_INVERT],
+                SYNC_CIRCUIT_NAMES: conf.get(SYNC_CIRCUIT_NAMES, True),
             },
         )
     )
@@ -1233,6 +1280,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 if "connected" in item and hasattr(dev, "connected"):
                                     dev.connected = item["connected"]
 
+                    # Update device registry if device or circuit names changed
+                    entry_config = {**(entry.data or {}), **(entry.options or {})}
+                    sync_names = bool(entry_config.get(SYNC_CIRCUIT_NAMES, True))
                     new_name = delta.get("device_name") or delta.get("deviceName")
                     gid_int: int | None = None
                     if delta.device_gid is not None:
@@ -1240,13 +1290,88 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             gid_int = int(delta.device_gid)
                         except (ValueError, TypeError):
                             gid_int = None
+
+                    registry_needs_sync = False
                     if (
-                        isinstance(new_name, str)
-                        and new_name
+                        sync_names
                         and gid_int is not None
                         and gid_int in DEVICE_INFORMATION
                     ):
-                        DEVICE_INFORMATION[gid_int].device_name = new_name
+                        target_dev = DEVICE_INFORMATION[gid_int]
+                        if (
+                            isinstance(new_name, str)
+                            and new_name
+                            and target_dev.device_name != new_name
+                        ):
+                            target_dev.device_name = new_name
+                            registry_needs_sync = True
+
+                        raw_channels = delta.get("channels")
+                        if isinstance(raw_channels, list) and target_dev.channels:
+                            for raw_ch in raw_channels:
+                                if not isinstance(raw_ch, dict):
+                                    continue
+                                ch_id = (
+                                    raw_ch.get("channel_num")
+                                    or raw_ch.get("channelNum")
+                                    or raw_ch.get("channel_id")
+                                    or raw_ch.get("channelId")
+                                )
+                                if ch_id is None:
+                                    continue
+                                ch_num_str = str(ch_id)
+                                if ch_num_str.startswith("Branch_"):
+                                    ch_num_str = ch_num_str.split("_", 1)[1]
+                                if (
+                                    "name" in raw_ch
+                                    or "display_name" in raw_ch
+                                    or "channel_name" in raw_ch
+                                    or "channelName" in raw_ch
+                                ):
+                                    ch_name = (
+                                        raw_ch.get("name")
+                                        if "name" in raw_ch
+                                        else raw_ch.get("display_name")
+                                        if "display_name" in raw_ch
+                                        else raw_ch.get("channel_name")
+                                        if "channel_name" in raw_ch
+                                        else raw_ch.get("channelName")
+                                    )
+                                    for ch in target_dev.channels:
+                                        if (
+                                            str(ch.channel_num) == ch_num_str
+                                            or str(getattr(ch, "channel_id", ""))
+                                            == str(ch_id)
+                                        ) and ch.name != ch_name:
+                                            ch.name = ch_name
+                                            registry_needs_sync = True
+
+                        single_ch_id = (
+                            delta.get("channel_num")
+                            or delta.get("channelNum")
+                            or delta.get("channel_id")
+                            or delta.get("channelId")
+                        )
+                        if single_ch_id is not None and target_dev.channels:
+                            ch_num_str = str(single_ch_id)
+                            if ch_num_str.startswith("Branch_"):
+                                ch_num_str = ch_num_str.split("_", 1)[1]
+                            single_ch_name = (
+                                delta.get("channel_name")
+                                or delta.get("channelName")
+                                or delta.get("name")
+                            )
+                            if single_ch_name is not None:
+                                for ch in target_dev.channels:
+                                    if (
+                                        str(ch.channel_num) == ch_num_str
+                                        or str(getattr(ch, "channel_id", ""))
+                                        == str(single_ch_id)
+                                    ) and ch.name != single_ch_name:
+                                        ch.name = single_ch_name
+                                        registry_needs_sync = True
+
+                    if registry_needs_sync:
                         async_setup_device_registry(hass, entry, DEVICE_INFORMATION)
 
                     if coordinator_device_status is not None:

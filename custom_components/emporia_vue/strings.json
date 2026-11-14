@@ -13,7 +13,8 @@
           "enable_1m": "Power Minute Average Sensor",
           "enable_1d": "Energy Today Sensor",
           "enable_1mon": "Energy This Month Sensor",
-          "solar_invert": "Invert Values for Solar Circuits"
+          "solar_invert": "Invert Values for Solar Circuits",
+          "sync_circuit_names": "Sync circuit names from Emporia app"
         }
       },
       "tokens": {
@@ -25,7 +26,8 @@
           "enable_1m": "[%key:component::emporia_vue::config::step::email_password::data::enable_1m%]",
           "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
-          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
+          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]",
+          "sync_circuit_names": "[%key:component::emporia_vue::config::step::email_password::data::sync_circuit_names%]"
         }
       },
       "reconfigure": {
@@ -33,7 +35,8 @@
           "enable_1m": "[%key:component::emporia_vue::config::step::email_password::data::enable_1m%]",
           "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
-          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]"
+          "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]",
+          "sync_circuit_names": "[%key:component::emporia_vue::config::step::email_password::data::sync_circuit_names%]"
         }
       },
       "reauth_oauth": {

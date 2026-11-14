@@ -40,7 +40,8 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 }
             },
             "user": {
@@ -55,7 +56,8 @@
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
                     "password": "Password",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 }
             },
             "tokens": {
@@ -66,7 +68,8 @@
                     "enable_1mon": "Energy This Month Sensor",
                     "id_token": "ID token",
                     "refresh_token": "Refresh token",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 },
                 "description": "Use this for Emporia accounts created with Sign in with Google or another SSO provider. Paste the Emporia tokens for the account."
             }
