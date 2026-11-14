@@ -241,13 +241,6 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             try:
                 user_input[AUTH_METHOD] = AUTH_METHOD_EMAIL_PASSWORD
                 info = await validate_input(user_input)
-                # prevent setting up the same account twice
-                await self.async_set_unique_id(info[CUSTOMER_GID])
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=info[CONFIG_TITLE], data=info
-                )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -255,6 +248,14 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
+            else:
+                # prevent setting up the same account twice
+                await self.async_set_unique_id(info[CUSTOMER_GID])
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=info[CONFIG_TITLE], data=info
+                )
 
         return self.async_show_form(
             step_id="email_password", data_schema=CONFIG_FLOW_SCHEMA, errors=errors
@@ -269,13 +270,6 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             try:
                 user_input[AUTH_METHOD] = AUTH_METHOD_TOKENS
                 info = await validate_input(user_input)
-                # prevent setting up the same account twice
-                await self.async_set_unique_id(info[CUSTOMER_GID])
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=info[CONFIG_TITLE], data=info
-                )
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -283,6 +277,14 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
+            else:
+                # prevent setting up the same account twice
+                await self.async_set_unique_id(info[CUSTOMER_GID])
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=info[CONFIG_TITLE], data=info
+                )
 
         return self.async_show_form(
             step_id="tokens", data_schema=TOKEN_CONFIG_FLOW_SCHEMA, errors=errors

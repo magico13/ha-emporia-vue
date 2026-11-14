@@ -153,18 +153,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
-    DEVICE_GIDS = []
-    DEVICE_INFORMATION = {}
-    LAST_DAY_INTEGRATED_MINUTE.clear()
-    LAST_MONTH_INTEGRATED_MINUTE.clear()
+    hass.data.setdefault(DOMAIN, {})
+
+    device_gids: list[str] = []
+    device_information: dict[int, VueDevice] = {}
+    last_minute_data: dict[str, Any] = {}
+    last_day_data: dict[str, Any] = {}
+    last_day_update: datetime | None = None
+    last_day_integrated_minute: dict[str, datetime] = {}
+    last_month_data: dict[str, Any] = {}
+    last_month_update: datetime | None = None
+    last_month_integrated_minute: dict[str, datetime] = {}
 
     entry_data = entry.data
     _LOGGER.debug(
         "Setting up Emporia Vue with entry data: %s",
         redact_config_data(entry_data),
     )
-    if SOLAR_INVERT in entry_data:
-        INVERT_SOLAR = entry_data[SOLAR_INVERT]
+    invert_solar: bool = entry_data.get(SOLAR_INVERT, True)
+    DEVICE_GIDS = device_gids
+    DEVICE_INFORMATION = device_information
+    INVERT_SOLAR = invert_solar
+    LAST_DAY_INTEGRATED_MINUTE.clear()
+    LAST_MONTH_INTEGRATED_MINUTE.clear()
     vue = PyEmVue()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
     try:
@@ -209,19 +220,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
         for device in devices:
-            if str(device.device_gid) not in DEVICE_GIDS:
-                DEVICE_GIDS.append(str(device.device_gid))
+            if str(device.device_gid) not in device_gids:
+                device_gids.append(str(device.device_gid))
                 _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
-                DEVICE_INFORMATION[device.device_gid] = device
+                device_information[device.device_gid] = device
             else:
-                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+                device_information[device.device_gid].channels += device.channels
 
         total_channels = 0
-        for device in DEVICE_INFORMATION.values():
+        for device in device_information.values():
             total_channels += len(device.channels)
         _LOGGER.info(
             "Found %s Emporia devices with %s total channels",
-            len(DEVICE_INFORMATION.keys()),
+            len(device_information.keys()),
             total_channels,
         )
 
@@ -231,95 +242,139 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             This is the place to pre-process the data to lookup tables
             so entities can quickly look up their data.
             """
-            data: dict = await update_sensors(vue, [Scale.MINUTE.value])
+            nonlocal last_minute_data
+            global LAST_MINUTE_DATA
+            data: dict = await update_sensors(
+                vue,
+                [Scale.MINUTE.value],
+                device_gids=device_gids,
+                device_information=device_information,
+                invert_solar=invert_solar,
+                last_minute_data=last_minute_data,
+                last_day_data=last_day_data,
+            )
             # store this, then have the daily sensors pull from it and integrate
             # then the daily can "true up" hourly (or more frequent) in case it's incorrect
             if data:
-                global LAST_MINUTE_DATA
+                last_minute_data = data
                 LAST_MINUTE_DATA = data
             return data
 
         async def async_update_day_sensors() -> dict:
+            nonlocal last_day_update, last_day_data
             global LAST_DAY_UPDATE
             global LAST_DAY_DATA
             now: datetime = datetime.now(UTC)
-            if not LAST_DAY_UPDATE or (now - LAST_DAY_UPDATE) > timedelta(minutes=15):
+            if not last_day_update or (now - last_day_update) > timedelta(minutes=15):
                 _LOGGER.info("Updating day sensors")
+                last_day_update = now
                 LAST_DAY_UPDATE = now
-                updated_day_data = await update_sensors(vue, [Scale.DAY.value])
-                apply_api_update_debounce(updated_day_data, LAST_DAY_DATA, "day")
+                updated_day_data = await update_sensors(
+                    vue,
+                    [Scale.DAY.value],
+                    device_gids=device_gids,
+                    device_information=device_information,
+                    invert_solar=invert_solar,
+                    last_minute_data=last_minute_data,
+                    last_day_data=last_day_data,
+                )
+                apply_api_update_debounce(updated_day_data, last_day_data, "day")
+                last_day_data = updated_day_data
                 LAST_DAY_DATA = updated_day_data
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into day sensors")
-                if LAST_MINUTE_DATA:
-                    for identifier, data in LAST_MINUTE_DATA.items():
+                if last_minute_data:
+                    for identifier, data in last_minute_data.items():
                         device_gid, channel_gid, _ = identifier.split("-")
                         day_id: str = f"{device_gid}-{channel_gid}-{Scale.DAY.value}"
                         if (
                             data
-                            and LAST_DAY_DATA
-                            and day_id in LAST_DAY_DATA
-                            and LAST_DAY_DATA[day_id]
-                            and "usage" in LAST_DAY_DATA[day_id]
-                            and LAST_DAY_DATA[day_id]["usage"] is not None
+                            and last_day_data
+                            and day_id in last_day_data
+                            and last_day_data[day_id]
+                            and "usage" in last_day_data[day_id]
+                            and last_day_data[day_id]["usage"] is not None
                         ):
                             # if we just passed midnight, then reset back to zero
                             timestamp: datetime = data["timestamp"]
                             if not is_newer_sample(
-                                LAST_DAY_INTEGRATED_MINUTE, day_id, timestamp
+                                last_day_integrated_minute, day_id, timestamp
                             ):
                                 continue
-                            await check_for_midnight(timestamp, int(device_gid), day_id)
+                            await check_for_midnight(
+                                timestamp,
+                                int(device_gid),
+                                day_id,
+                                device_information=device_information,
+                                last_day_data=last_day_data,
+                            )
 
-                            LAST_DAY_DATA[day_id]["usage"] += data[
+                            last_day_data[day_id]["usage"] += data[
                                 "usage"
                             ]  # already in kwh
-                            LAST_DAY_INTEGRATED_MINUTE[day_id] = timestamp
-            return LAST_DAY_DATA
+                            last_day_integrated_minute[day_id] = timestamp
+            return last_day_data
 
         async def async_update_month_sensors() -> dict:
+            nonlocal last_month_update, last_month_data
             global LAST_MONTH_UPDATE
             global LAST_MONTH_DATA
             now: datetime = datetime.now(UTC)
-            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
+            if not last_month_update or (now - last_month_update) > timedelta(minutes=30):
                 _LOGGER.info("Updating month sensors")
+                last_month_update = now
                 LAST_MONTH_UPDATE = now
-                updated_month_data = await update_sensors(vue, [Scale.MONTH.value])
+                updated_month_data = await update_sensors(
+                    vue,
+                    [Scale.MONTH.value],
+                    device_gids=device_gids,
+                    device_information=device_information,
+                    invert_solar=invert_solar,
+                    last_minute_data=last_minute_data,
+                    last_day_data=last_day_data,
+                )
                 apply_api_update_debounce(
                     updated_month_data,
-                    LAST_MONTH_DATA,
+                    last_month_data,
                     "month",
                 )
+                last_month_data = updated_month_data
                 LAST_MONTH_DATA = updated_month_data
             else:
                 # integrate the minute data
                 _LOGGER.info("Integrating minute data into month sensors")
-                if LAST_MINUTE_DATA:
-                    for identifier, data in LAST_MINUTE_DATA.items():
+                if last_minute_data:
+                    for identifier, data in last_minute_data.items():
                         device_gid, channel_gid, _ = identifier.split("-")
                         month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
                         if (
                             data
-                            and LAST_MONTH_DATA
-                            and month_id in LAST_MONTH_DATA
-                            and LAST_MONTH_DATA[month_id]
-                            and "usage" in LAST_MONTH_DATA[month_id]
-                            and LAST_MONTH_DATA[month_id]["usage"] is not None
+                            and last_month_data
+                            and month_id in last_month_data
+                            and last_month_data[month_id]
+                            and "usage" in last_month_data[month_id]
+                            and last_month_data[month_id]["usage"] is not None
                         ):
                             # if we just passed the billing cycle start, reset back to zero
                             timestamp: datetime = data["timestamp"]
                             if not is_newer_sample(
-                                LAST_MONTH_INTEGRATED_MINUTE, month_id, timestamp
+                                last_month_integrated_minute, month_id, timestamp
                             ):
                                 continue
-                            await check_for_new_month(timestamp, int(device_gid), month_id)
+                            await check_for_new_month(
+                                timestamp,
+                                int(device_gid),
+                                month_id,
+                                device_information=device_information,
+                                last_month_data=last_month_data,
+                            )
 
-                            LAST_MONTH_DATA[month_id]["usage"] += data[
+                            last_month_data[month_id]["usage"] += data[
                                 "usage"
                             ]  # already in kwh
-                            LAST_MONTH_INTEGRATED_MINUTE[month_id] = timestamp
-            return LAST_MONTH_DATA
+                            last_month_integrated_minute[month_id] = timestamp
+            return last_month_data
 
         coordinator_1min = None
         retry_update_methods: dict[str, TolerantUpdateMethod] = {}
@@ -335,6 +390,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="minute telemetry",
                 update_method=minute_update_method,
@@ -356,6 +412,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="monthly telemetry",
                 update_method=monthly_update_method,
@@ -378,6 +435,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_day_sensor = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="daily telemetry",
                 update_method=daily_update_method,
@@ -389,7 +447,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Check if any devices have outlets or chargers
         has_controllable_devices = any(
             device.outlet or device.ev_charger
-            for device in DEVICE_INFORMATION.values()
+            for device in device_information.values()
         )
 
         async def async_update_device_status() -> dict[str, Any]:
@@ -416,6 +474,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_device_status = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 name="device_status",
                 update_method=async_update_device_status,
                 update_interval=timedelta(minutes=1),
@@ -469,9 +528,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
 
             charger_gid = int(gid_match.group(0))
+            target_vue: PyEmVue | None = None
+            target_device_info: dict[int, VueDevice] | None = None
+            domain_entries = hass.data.get(DOMAIN, {})
             if (
-                charger_gid not in DEVICE_INFORMATION
-                or not DEVICE_INFORMATION[charger_gid].ev_charger
+                charger_entity.config_entry_id
+                and charger_entity.config_entry_id in domain_entries
+            ):
+                entry_store = domain_entries[charger_entity.config_entry_id]
+                info_map = entry_store.get("device_information", {})
+                if charger_gid in info_map:
+                    target_vue = entry_store.get(VUE_DATA)
+                    target_device_info = info_map
+            if target_device_info is None:
+                for entry_store in domain_entries.values():
+                    if not isinstance(entry_store, Mapping):
+                        continue
+                    info_map = entry_store.get("device_information", {})
+                    if charger_gid in info_map:
+                        target_vue = entry_store.get(VUE_DATA)
+                        target_device_info = info_map
+                        break
+            if target_device_info is None and charger_gid in DEVICE_INFORMATION:
+                target_vue = vue
+                target_device_info = DEVICE_INFORMATION
+
+            if (
+                target_device_info is None
+                or target_vue is None
+                or charger_gid not in target_device_info
+                or not target_device_info[charger_gid].ev_charger
             ):
                 raise HomeAssistantError(
                     "Set Charging Current called on invalid device with entity id"
@@ -484,7 +570,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise HomeAssistantError(
                     f"Could not find state for entity {charger_entity.entity_id}"
                 )
-            charger_info: VueDevice = DEVICE_INFORMATION[charger_gid]
+            charger_info: VueDevice = target_device_info[charger_gid]
             if charger_info.ev_charger is None:
                 raise HomeAssistantError(
                     f"Could not find charger info for device {charger_gid}"
@@ -499,12 +585,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             try:
                 updated_charger: ChargerDevice = await loop.run_in_executor(
                     None,
-                    vue.update_charger,
+                    target_vue.update_charger,
                     charger_info.ev_charger,
                     state.state == "on",
                     current,
                 )
-                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
+                target_device_info[charger_gid].ev_charger = updated_charger
                 # update the state of the charger entity using the updated data
                 state: State | None = hass.states.get(charger_entity.entity_id)
                 if state:
@@ -524,9 +610,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
                 raise
 
-        hass.services.async_register(
-            DOMAIN, "set_charger_current", handle_set_charger_current
-        )
+        if not hass.services.has_service(DOMAIN, "set_charger_current"):
+            hass.services.async_register(
+                DOMAIN, "set_charger_current", handle_set_charger_current
+            )
 
     except Exception as err:
         _LOGGER.warning("Exception while setting up Emporia Vue. Will retry. %s", err)
@@ -540,7 +627,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
         "coordinator_device_status": coordinator_device_status,
-        "device_information": DEVICE_INFORMATION,
+        "device_information": device_information,
         "retry_update_methods": retry_update_methods,
     }
 
@@ -565,28 +652,42 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not hass.data[DOMAIN] and hass.services.has_service(
+            DOMAIN, "set_charger_current"
+        ):
+            hass.services.async_remove(DOMAIN, "set_charger_current")
 
     return unload_ok
 
 
-async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
+async def update_sensors(
+    vue: PyEmVue,
+    scales: list[str],
+    *,
+    device_gids: list[str] | None = None,
+    device_information: dict[int, VueDevice] | None = None,
+    invert_solar: bool | None = None,
+    last_minute_data: dict[str, Any] | None = None,
+    last_day_data: dict[str, Any] | None = None,
+) -> dict:
     """Fetch data from API endpoint."""
     try:
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
         data: dict = {}
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+        active_gids = DEVICE_GIDS if device_gids is None else device_gids
         for scale in scales:
             utcnow: datetime = datetime.now(UTC)
             usage_dict: dict[int, VueUsageDevice] = await loop.run_in_executor(
-                None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                None, vue.get_device_list_usage, active_gids, utcnow, scale
             )
             if not usage_dict:
                 _LOGGER.warning(
                     "No channels found during update for scale %s. Retrying", scale
                 )
                 usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                    None, vue.get_device_list_usage, active_gids, utcnow, scale
                 )
             if usage_dict:
                 flattened, data_time = flatten_usage_data(usage_dict, scale)
@@ -596,6 +697,10 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
                     data,
                     utcnow,
                     data_time,
+                    device_information=device_information,
+                    invert_solar=invert_solar,
+                    last_minute_data=last_minute_data,
+                    last_day_data=last_day_data,
                 )
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
@@ -633,10 +738,19 @@ async def parse_flattened_usage_data(
     data: dict[str, Any],
     requested_time: datetime,
     data_time: datetime,
+    *,
+    device_information: dict[int, VueDevice] | None = None,
+    invert_solar: bool | None = None,
+    last_minute_data: dict[str, Any] | None = None,
+    last_day_data: dict[str, Any] | None = None,
 ) -> None:
     """Loop through the device list and find the corresponding update data."""
+    active_device_info = (
+        DEVICE_INFORMATION if device_information is None else device_information
+    )
+    active_invert_solar = INVERT_SOLAR if invert_solar is None else invert_solar
     unused_data: dict[str, VueDeviceChannelUsage] = flattened_data.copy()
-    for gid, info in DEVICE_INFORMATION.items():
+    for gid, info in active_device_info.items():
         local_time: datetime = await change_time_to_local(data_time, info.time_zone)
         requested_time_local: datetime = await change_time_to_local(
             requested_time, info.time_zone
@@ -676,7 +790,12 @@ async def parse_flattened_usage_data(
             # Use the last value if we have it, otherwise use zero
             fixed_usage: float = channel.usage if channel else 0.0
             if fixed_usage is None:
-                fixed_usage = handle_none_usage(scale, identifier)
+                fixed_usage = handle_none_usage(
+                    scale,
+                    identifier,
+                    last_minute_data=last_minute_data,
+                    last_day_data=last_day_data,
+                )
                 _LOGGER.info(
                     "Got None usage for device %s channel %s scale %s and timestamp %s. "
                     "Instead using a value of %s",
@@ -690,7 +809,7 @@ async def parse_flattened_usage_data(
             bidirectional = "bidirectional" in info_channel.type.lower()
             is_solar = info_channel.channel_type_gid == 13
             fixed_usage = fix_usage_sign(
-                channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
+                channel_num, fixed_usage, bidirectional, is_solar, active_invert_solar
             )
 
             data[identifier] = {
@@ -711,21 +830,37 @@ async def parse_flattened_usage_data(
         )
         channels_were_added = False
         for channel in unused_data.values():
-            channels_were_added |= await handle_special_channels_for_device(channel)
+            channels_were_added |= await handle_special_channels_for_device(
+                channel, device_information=active_device_info
+            )
             # we'll also need to register these entities I think. They might show up
             # automatically on the first run When we're done handling the unused data
             # we need to rerun the update
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
             await parse_flattened_usage_data(
-                flattened_data, scale, data, requested_time, data_time
+                flattened_data,
+                scale,
+                data,
+                requested_time,
+                data_time,
+                device_information=active_device_info,
+                invert_solar=active_invert_solar,
+                last_minute_data=last_minute_data,
+                last_day_data=last_day_data,
             )
 
 
-async def handle_special_channels_for_device(channel: VueDeviceChannel) -> bool:
+async def handle_special_channels_for_device(
+    channel: VueDeviceChannel,
+    device_information: dict[int, VueDevice] | None = None,
+) -> bool:
     """Handle the special channels for a device, if they exist."""
-    if channel.device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[channel.device_gid]
+    active_device_info = (
+        DEVICE_INFORMATION if device_information is None else device_information
+    )
+    if channel.device_gid in active_device_info:
+        device_info: VueDevice = active_device_info[channel.device_gid]
         # if channel.channel_num in [
         #     "MainsFromGrid",
         #     "MainsToGrid",
@@ -809,17 +944,28 @@ async def change_time_to_local(time: datetime, tz_string: str) -> datetime:
     return time.astimezone(tz_info)
 
 
-async def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
+async def check_for_midnight(
+    timestamp: datetime,
+    device_gid: int,
+    day_id: str,
+    *,
+    device_information: dict[int, VueDevice] | None = None,
+    last_day_data: dict[str, Any] | None = None,
+):
     """If midnight has recently passed, reset the LAST_DAY_DATA for Day sensors to zero."""
-    if device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[device_gid]
+    active_device_info = (
+        DEVICE_INFORMATION if device_information is None else device_information
+    )
+    active_day_data = LAST_DAY_DATA if last_day_data is None else last_day_data
+    if device_gid in active_device_info:
+        device_info: VueDevice = active_device_info[device_gid]
         local_time: datetime = await change_time_to_local(
             timestamp, device_info.time_zone
         )
         local_midnight: datetime = local_time.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        last_reset = LAST_DAY_DATA[day_id]["reset"]
+        last_reset = active_day_data[day_id]["reset"]
         if local_midnight > last_reset:
             # New reset time found
             _LOGGER.info(
@@ -830,14 +976,25 @@ async def check_for_midnight(timestamp: datetime, device_gid: int, day_id: str):
                 local_midnight,
                 last_reset,
             )
-            LAST_DAY_DATA[day_id]["usage"] = 0
-            LAST_DAY_DATA[day_id]["reset"] = local_midnight
+            active_day_data[day_id]["usage"] = 0
+            active_day_data[day_id]["reset"] = local_midnight
 
 
-async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: str):
+async def check_for_new_month(
+    timestamp: datetime,
+    device_gid: int,
+    month_id: str,
+    *,
+    device_information: dict[int, VueDevice] | None = None,
+    last_month_data: dict[str, Any] | None = None,
+):
     """If a new billing cycle has started, reset the LAST_MONTH_DATA for Month sensors to zero."""
-    if device_gid in DEVICE_INFORMATION:
-        device_info: VueDevice = DEVICE_INFORMATION[device_gid]
+    active_device_info = (
+        DEVICE_INFORMATION if device_information is None else device_information
+    )
+    active_month_data = LAST_MONTH_DATA if last_month_data is None else last_month_data
+    if device_gid in active_device_info:
+        device_info: VueDevice = active_device_info[device_gid]
         local_time: datetime = await change_time_to_local(
             timestamp, device_info.time_zone
         )
@@ -846,7 +1003,7 @@ async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: st
             device_info.billing_cycle_start_day,
             True,
         )
-        last_reset = LAST_MONTH_DATA[month_id]["reset"]
+        last_reset = active_month_data[month_id]["reset"]
         if current_reset > last_reset:
             # New billing cycle started
             _LOGGER.info(
@@ -857,8 +1014,8 @@ async def check_for_new_month(timestamp: datetime, device_gid: int, month_id: st
                 current_reset,
                 last_reset,
             )
-            LAST_MONTH_DATA[month_id]["usage"] = 0
-            LAST_MONTH_DATA[month_id]["reset"] = current_reset
+            active_month_data[month_id]["usage"] = 0
+            active_month_data[month_id]["reset"] = current_reset
 
 
 def determine_reset_datetime(
@@ -893,20 +1050,30 @@ def determine_reset_datetime(
     return reset_datetime
 
 
-def handle_none_usage(scale: str, identifier: str):
+def handle_none_usage(
+    scale: str,
+    identifier: str,
+    *,
+    last_minute_data: dict[str, Any] | None = None,
+    last_day_data: dict[str, Any] | None = None,
+):
     """Handle the case of the usage being None by using the previous value or zero."""
+    active_minute_data = (
+        LAST_MINUTE_DATA if last_minute_data is None else last_minute_data
+    )
+    active_day_data = LAST_DAY_DATA if last_day_data is None else last_day_data
     if (
         scale is Scale.MINUTE.value
-        and identifier in LAST_MINUTE_DATA
-        and "usage" in LAST_MINUTE_DATA[identifier]
+        and identifier in active_minute_data
+        and "usage" in active_minute_data[identifier]
     ):
-        return LAST_MINUTE_DATA[identifier]["usage"]
+        return active_minute_data[identifier]["usage"]
     if (
         scale is Scale.DAY.value
-        and identifier in LAST_DAY_DATA
-        and "usage" in LAST_DAY_DATA[identifier]
+        and identifier in active_day_data
+        and "usage" in active_day_data[identifier]
     ):
-        return LAST_DAY_DATA[identifier]["usage"]
+        return active_day_data[identifier]["usage"]
     return 0
 
 

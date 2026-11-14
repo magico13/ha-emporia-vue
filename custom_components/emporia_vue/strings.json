@@ -67,9 +67,12 @@
       "oauth_timeout": "Timed out completing authorization. Please try again.",
       "oauth_unauthorized": "Authorization was rejected or expired. Please sign in again.",
       "user_rejected_authorize": "Authorization was cancelled or rejected: {error}",
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "already_configured": "[%key:common::config_flow::abort::already_configured_account%]",
       "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+    },
+    "initiate_flow": {
+      "user": "[%key:common::config_flow::initiate_flow::account%]"
     }
   },
   "entity": {
