@@ -47,7 +47,7 @@ async def async_setup_entry(
         if int_gid not in device_information:
             continue
         device = device_information[int_gid]
-        if device.ev_charger:
+        if device.evse:
             entities.append(
                 EmporiaChargerCurrentNumber(coordinator, vue, device, site_map=site_map)
             )
@@ -75,7 +75,7 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
             site_map=site_map,
         )
         self._attr_native_min_value = 6.0
-        self._attr_native_max_value = float(device.ev_charger.max_charging_rate)
+        self._attr_native_max_value = float(device.evse.max_charging_rate)
         self._attr_native_step = 1.0
         self._attr_translation_key = "charge_current_limit"
         self._attr_icon = "mdi:current-ac"

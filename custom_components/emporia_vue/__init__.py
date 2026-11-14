@@ -30,8 +30,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pyemvue import PyEmVue
 from pyemvue.device import (
-    ChargerDevice,
     EvseControlStatus,
+    EVSEDevice,
     OutletDevice,
     VueDevice,
     VueDeviceChannel,
@@ -151,10 +151,6 @@ def _merge_discovered_devices(
                 device, "outlet", None
             ):
                 existing.outlet = device.outlet
-            if not getattr(existing, "ev_charger", None) and getattr(
-                device, "ev_charger", None
-            ):
-                existing.ev_charger = device.ev_charger
             if not getattr(existing, "evse", None) and getattr(device, "evse", None):
                 existing.evse = device.evse
 
@@ -976,11 +972,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Check if any devices have outlets or chargers
         has_controllable_devices = any(
-            bool(
-                getattr(device, "outlet", None)
-                or getattr(device, "evse", None)
-                or getattr(device, "ev_charger", None)
-            )
+            bool(getattr(device, "outlet", None) or getattr(device, "evse", None))
             for device in DEVICE_INFORMATION.values()
         )
 
@@ -989,7 +981,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             try:
                 data: dict[str, Any] = {}
                 outlets: list[OutletDevice]
-                chargers: list[ChargerDevice]
+                chargers: list[EVSEDevice]
 
                 outlets, chargers = await hass.async_add_executor_job(
                     vue.get_devices_status
@@ -1088,10 +1080,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         has_connected_once = True
                         return
                     has_chargers = any(
-                        bool(
-                            getattr(dev, "evse", None)
-                            or getattr(dev, "ev_charger", None)
-                        )
+                        bool(getattr(dev, "evse", None))
                         for dev in DEVICE_INFORMATION.values()
                     )
                     new_interval = (
@@ -1158,9 +1147,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         if not coordinator_device_status.data:
                             coordinator_device_status.data = {}
                         current_data = dict(coordinator_device_status.data)
-                        chargers_to_refresh: dict[
-                            int, tuple[ChargerDevice, Any, Any]
-                        ] = {}
+                        chargers_to_refresh: dict[int, tuple[EVSEDevice, Any, Any]] = {}
                         processed_gids: set[int] = set()
 
                         # Update EVSE chargers
@@ -1173,7 +1160,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 else None
                             )
                             if gid_key in current_data and isinstance(
-                                current_data[gid_key], ChargerDevice
+                                current_data[gid_key], EVSEDevice
                             ):
                                 dev = current_data[gid_key]
                                 status_changed = _apply_evse_delta_fields(
@@ -1212,7 +1199,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             gid_key = str(delta.device_gid)
                             if gid_key in current_data:
                                 dev = current_data[gid_key]
-                                if isinstance(dev, ChargerDevice):
+                                if isinstance(dev, EVSEDevice):
                                     status_changed = _apply_evse_delta_fields(
                                         dev, delta
                                     )
@@ -1235,7 +1222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         if hasattr(vue, "get_evse_control") and chargers_to_refresh:
 
                             async def _refresh_charger_control(
-                                charger_dev: ChargerDevice,
+                                charger_dev: EVSEDevice,
                                 source_obj: Any,
                                 extra_obj: Any,
                             ) -> None:
@@ -1489,7 +1476,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             charger_gid = int(gid_match.group(0))
             if (
                 charger_gid not in DEVICE_INFORMATION
-                or not DEVICE_INFORMATION[charger_gid].ev_charger
+                or not DEVICE_INFORMATION[charger_gid].evse
             ):
                 raise ServiceValidationError(
                     "Set Charging Current called on invalid device with entity id"
@@ -1503,20 +1490,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     f"Could not find state for entity {charger_entity.entity_id}"
                 )
             charger_info: VueDevice = DEVICE_INFORMATION[charger_gid]
-            if charger_info.ev_charger is None:
+            if charger_info.evse is None:
                 raise ServiceValidationError(
                     f"Could not find charger info for device {charger_gid}"
                 )
             # Scale the current to a minimum of 6 amps and max of the circuit max
             current = max(6, current)
-            current = min(current, charger_info.ev_charger.max_charging_rate)
+            current = min(current, charger_info.evse.max_charging_rate)
             _LOGGER.info(
                 "Setting charger %s to current of %d amps", charger_gid, current
             )
 
             try:
                 dev_id = resolve_charger_device_id(
-                    charger_info, charger_info.ev_charger, charger_gid
+                    charger_info, charger_info.evse, charger_gid
                 )
                 if hasattr(vue, "set_evse_settings"):
                     await loop.run_in_executor(
@@ -1529,7 +1516,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     await loop.run_in_executor(
                         None,
                         vue.update_charger,
-                        charger_info.ev_charger,
+                        charger_info.evse,
                         state.state == "on",
                         current,
                     )
@@ -1699,7 +1686,7 @@ def _overlay_evse_control_from_source(
         if getattr(candidate, "vehicle_charging", None) is True:
             ctrl.session_active = True
         rate = getattr(candidate, "charging_rate", None)
-        if rate is not None and (not isinstance(candidate, ChargerDevice) or rate > 0):
+        if rate is not None and (not isinstance(candidate, EVSEDevice) or rate > 0):
             ctrl.offered_amps = rate
         for field in _SSE_EVSE_TELEMETRY_FIELDS:
             val = getattr(candidate, field, None)
@@ -1708,11 +1695,11 @@ def _overlay_evse_control_from_source(
 
 
 def _apply_evse_delta_fields(
-    dev: ChargerDevice,
+    dev: EVSEDevice,
     source: Any,
     extra_delta: Any = None,
 ) -> bool:
-    """Apply EVSE fields from a stream ChargerDevice or DeviceStatusDelta.
+    """Apply EVSE fields from a stream EVSEDevice or DeviceStatusDelta.
 
     Return True when charger status transitioned to a new non-empty value.
     """
@@ -1733,7 +1720,7 @@ def _apply_evse_delta_fields(
             if text_val:
                 setattr(dev, text_attr, text_val)
         rate = getattr(candidate, "charging_rate", None)
-        if rate is not None and (not isinstance(candidate, ChargerDevice) or rate > 0):
+        if rate is not None and (not isinstance(candidate, EVSEDevice) or rate > 0):
             dev.charging_rate = rate
 
     if getattr(dev, "evse_control", None) is None:

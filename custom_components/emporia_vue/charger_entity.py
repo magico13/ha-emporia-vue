@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 from pyemvue import pyemvue
-from pyemvue.device import ChargerDevice, VueDevice
+from pyemvue.device import EVSEDevice, VueDevice
 
 from .const import DOMAIN
 
@@ -113,7 +113,7 @@ def _clean_upper_str(value: Any) -> str:
 
 def resolve_charger_device_id(
     device: VueDevice | None,
-    charger_data: ChargerDevice | None = None,
+    charger_data: EVSEDevice | None = None,
     fallback_gid: int | str = "",
 ) -> str:
     """Return the canonical device ID (e.g. manufacturer_id) for EVSE API calls."""
@@ -127,16 +127,16 @@ def resolve_charger_device_id(
 
 def resolve_charger_load_gid(
     device: VueDevice | None,
-    charger_data: ChargerDevice | None = None,
+    charger_data: EVSEDevice | None = None,
     fallback_gid: int | str = 0,
 ) -> int:
     """Return the canonical controllable load GID for an EVSE or outlet device."""
-    ev_charger = getattr(device, "ev_charger", None)
+    evse = getattr(device, "evse", None)
     outlet_obj = getattr(device, "outlet", None)
     gid = (
         getattr(device, "load_gid", None)
         or getattr(charger_data, "load_gid", None)
-        or getattr(ev_charger, "load_gid", None)
+        or getattr(evse, "load_gid", None)
         or getattr(outlet_obj, "load_gid", None)
         or fallback_gid
     )
@@ -146,7 +146,7 @@ def resolve_charger_load_gid(
         return int(fallback_gid)
 
 
-def resolve_effective_charger_status(charger: ChargerDevice | None) -> str:
+def resolve_effective_charger_status(charger: EVSEDevice | None) -> str:
     """Return authoritative uppercase charger status from evse_control or charger.status."""
     if charger is None:
         return ""
@@ -157,7 +157,7 @@ def resolve_effective_charger_status(charger: ChargerDevice | None) -> str:
     return _clean_upper_str(getattr(charger, "status", None))
 
 
-def is_pro_control_locked(charger: ChargerDevice | None) -> bool:
+def is_pro_control_locked(charger: EVSEDevice | None) -> bool:
     """Return True iff charger is locked under Emporia Invite / Partner Pro Control."""
     if charger is None:
         return False
@@ -165,7 +165,7 @@ def is_pro_control_locked(charger: ChargerDevice | None) -> bool:
     return isinstance(code, str) and bool(code.strip())
 
 
-def has_charger_fault(charger: ChargerDevice | None) -> bool:
+def has_charger_fault(charger: EVSEDevice | None) -> bool:
     """Return True iff EVSE has an active hardware fault condition (IEC State F)."""
     if charger is None:
         return False
@@ -187,7 +187,7 @@ def has_charger_fault(charger: ChargerDevice | None) -> bool:
     return "FAULT" in message_upper or "ERROR" in message_upper
 
 
-def is_charger_offline(charger: ChargerDevice | None) -> bool:
+def is_charger_offline(charger: EVSEDevice | None) -> bool:
     """Return True iff EVSE is disconnected from Emporia cloud telemetry."""
     if charger is None:
         return True
@@ -251,14 +251,14 @@ def resolve_excess_solar_participation(
     return False, None
 
 
-def evaluate_charger_switch_available(charger: ChargerDevice | None) -> bool:
+def evaluate_charger_switch_available(charger: EVSEDevice | None) -> bool:
     """Return True iff switch.<evse> can accept TURN_ON / TURN_OFF commands."""
     if charger is None:
         return False
     return not is_charger_offline(charger)
 
 
-def evaluate_charger_switch_is_on(charger: ChargerDevice | None) -> bool:
+def evaluate_charger_switch_is_on(charger: EVSEDevice | None) -> bool:
     """Return True iff EVSE contactor is armed, offering current, or actively charging."""
     if charger is None:
         return False
@@ -282,7 +282,7 @@ def evaluate_charger_switch_is_on(charger: ChargerDevice | None) -> bool:
     return bool(getattr(charger, "charger_on", False))
 
 
-def evaluate_full_power_override_available(charger: ChargerDevice | None) -> bool:
+def evaluate_full_power_override_available(charger: EVSEDevice | None) -> bool:
     """Return True iff CHARGE_AT_FULL_POWER is an executable state transition."""
     if not evaluate_charger_switch_available(charger):
         return False
@@ -307,7 +307,7 @@ def evaluate_full_power_override_available(charger: ChargerDevice | None) -> boo
     )
 
 
-def evaluate_iec_charger_status(charger: ChargerDevice | None) -> tuple[str, str]:
+def evaluate_iec_charger_status(charger: EVSEDevice | None) -> tuple[str, str]:
     """Return backward-compatible (state_label, iec_61851_code) tuple."""
     if charger is None:
         return "Disconnected", "A"
@@ -337,7 +337,7 @@ def evaluate_iec_charger_status(charger: ChargerDevice | None) -> tuple[str, str
 
 
 def evaluate_operating_state(
-    charger: ChargerDevice | None,
+    charger: EVSEDevice | None,
     excess_solar_enabled: bool,
 ) -> str:
     """Map EVSE state deterministically to one of the 23 OPERATING_STATE_OPTIONS."""
@@ -426,7 +426,7 @@ def evaluate_operating_state(
 
 
 def evaluate_charger_substatus(
-    charger: ChargerDevice | None,
+    charger: EVSEDevice | None,
     excess_solar_enabled: bool,
 ) -> str | None:
     """Map EVSE operational state deterministically to canonical substatus string."""
@@ -586,7 +586,7 @@ class EmporiaChargerEntity(EmporiaLocationEntityMixin, CoordinatorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the device."""
         attrs = dict(super().extra_state_attributes or {})
-        data: ChargerDevice | None = (
+        data: EVSEDevice | None = (
             self.coordinator.data.get(self._device_gid)
             if self.coordinator and self.coordinator.data
             else None

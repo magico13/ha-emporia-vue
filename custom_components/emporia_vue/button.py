@@ -51,7 +51,7 @@ async def async_setup_entry(
         if int_gid not in device_information:
             continue
         device = device_information[int_gid]
-        if device.ev_charger:
+        if device.evse:
             buttons.append(
                 EmporiaChargerFullPowerOverrideButton(
                     coordinator, vue, device, site_map=site_map

@@ -9,7 +9,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from pyemvue.device import ChargerDevice, EvseControlStatus, OutletDevice, VueDevice
+from pyemvue.device import EvseControlStatus, EVSEDevice, OutletDevice, VueDevice
 from pyemvue.stream import DeviceStatusDelta, EmporiaStreamClient
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -65,7 +65,7 @@ def mock_vue_with_controllable_devices() -> MagicMock:
 
     charger_dev = VueDevice(gid=1003, modelNum="EVSE-001", firmwareVersion="2.1.0")
     charger_dev.device_name = "Garage Charger"
-    charger_dev.ev_charger = ChargerDevice(gid=1003, on=True)
+    charger_dev.evse = EVSEDevice(gid=1003, on=True)
 
     outlet_dev = VueDevice(gid=2001, modelNum="PLUG-001", firmwareVersion="1.0.0")
     outlet_dev.device_name = "Living Room Plug"
@@ -75,7 +75,7 @@ def mock_vue_with_controllable_devices() -> MagicMock:
     vue.get_devices.return_value = [charger_dev, outlet_dev]
 
     # Status call
-    active_charger = ChargerDevice(gid=1003, on=True)
+    active_charger = EVSEDevice(gid=1003, on=True)
     active_charger.status = "Standby"
     active_outlet = OutletDevice(gid=2001, on=True)
     vue.get_devices_status.return_value = ([active_outlet], [active_charger])
@@ -221,7 +221,7 @@ async def test_sse_stream_delta_updates_coordinator_data(
         await asyncio.wait_for(listener_notified.wait(), timeout=1.0)
 
         # Verify updated data in coordinator
-        charger: ChargerDevice = coordinator.data["1003"]
+        charger: EVSEDevice = coordinator.data["1003"]
         assert charger.status == "CHARGING"
         assert charger.vehicle_connected is True
         assert charger.vehicle_charging is True
@@ -507,7 +507,7 @@ async def test_sse_polling_fallback_resilience(
         ]["coordinator_device_status"]
 
         # Update returned by polling mock
-        polled_charger = ChargerDevice(gid=1003, on=True)
+        polled_charger = EVSEDevice(gid=1003, on=True)
         polled_charger.status = "Charging-Polled"
         polled_outlet = OutletDevice(gid=2001, on=False)
         mock_vue_with_controllable_devices.get_devices_status.return_value = (
@@ -599,9 +599,7 @@ async def test_sse_adaptive_polling_interval_coordination(
         device_info_map = hass.data[DOMAIN][mock_config_entry.entry_id][
             "device_information"
         ]
-        device_info_map[1003].ev_charger = None
-        if hasattr(device_info_map[1003], "evse"):
-            device_info_map[1003].evse = None
+        device_info_map[1003].evse = None
         captured_on_connect()
         assert coordinator.update_interval == timedelta(minutes=10)
 
@@ -672,7 +670,7 @@ async def test_sse_connected_off_does_not_fabricate_subtext_and_clears_stale_on_
         await event_queue.put(connected_off_delta)
         await asyncio.wait_for(listener_notified.wait(), timeout=1.0)
 
-        charger: ChargerDevice = coordinator.data["1003"]
+        charger: EVSEDevice = coordinator.data["1003"]
         assert mock_vue_with_controllable_devices.get_evse_control.call_count >= 1
         assert charger.evse_control is not None
         assert charger.evse_control.subtext_type is None

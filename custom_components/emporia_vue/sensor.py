@@ -22,7 +22,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
-from pyemvue.device import ChargerDevice, VueDevice, VueDeviceChannel
+from pyemvue.device import EVSEDevice, VueDevice, VueDeviceChannel
 from pyemvue.enums import Scale
 
 from . import determine_circuit_model
@@ -158,7 +158,7 @@ async def async_setup_entry(
             if not str(gid).isdigit():
                 continue
             int_gid = int(gid)
-            if int_gid in device_information and device_information[int_gid].ev_charger:
+            if int_gid in device_information and device_information[int_gid].evse:
                 dev = device_information[int_gid]
                 charger_sensors.append(
                     EmporiaChargerStatusSensor(
@@ -592,8 +592,8 @@ class EmporiaChargerSensorBase(
         self._explicit_site_map = site_map
         self._attr_has_entity_name = True
 
-    def _get_charger_data(self) -> ChargerDevice | None:
-        """Return coordinator ChargerDevice entry if available."""
+    def _get_charger_data(self) -> EVSEDevice | None:
+        """Return coordinator EVSEDevice entry if available."""
         if not self.coordinator or not self.coordinator.data:
             return None
         return self.coordinator.data.get(self._device_gid)
@@ -642,7 +642,7 @@ class EmporiaChargerStatusSensor(EmporiaChargerSensorBase):
         self._attr_options = CHARGER_STATUS_OPTIONS
         self._attr_icon = "mdi:ev-station"
 
-    def _target_load_gid(self, data: ChargerDevice) -> int:
+    def _target_load_gid(self, data: EVSEDevice) -> int:
         return resolve_charger_load_gid(self._device, data, self._device_gid)
 
     @property

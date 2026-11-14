@@ -11,7 +11,7 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
-from pyemvue.device import ChargerDevice, EvseControlStatus, VueDevice
+from pyemvue.device import EvseControlStatus, EVSEDevice, VueDevice
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.emporia_vue.const import DOMAIN
@@ -29,8 +29,8 @@ from custom_components.emporia_vue.sensor import (
 
 
 @pytest.fixture
-def mock_evse_device() -> tuple[VueDevice, ChargerDevice]:
-    """Return a mock EVSE VueDevice and ChargerDevice pair."""
+def mock_evse_device() -> tuple[VueDevice, EVSEDevice]:
+    """Return a mock EVSE VueDevice and EVSEDevice pair."""
     vue_device = VueDevice(
         gid=1003,
         modelNum="EVSE-001",
@@ -39,19 +39,19 @@ def mock_evse_device() -> tuple[VueDevice, ChargerDevice]:
     vue_device.device_name = "Garage Charger"
     vue_device.manufacturer_id = "MANUF-EVSE-1003"
 
-    charger_device = ChargerDevice(gid=1003, on=True)
+    charger_device = EVSEDevice(gid=1003, on=True)
     charger_device.charging_rate = 32
     charger_device.max_charging_rate = 48
     charger_device.status = "Charging"
     charger_device.message = "Vehicle Connected"
     charger_device.fault_text = None
 
-    vue_device.ev_charger = charger_device
+    vue_device.evse = charger_device
     return vue_device, charger_device
 
 
 async def test_evse_session_energy_sensor_metrics_and_device_info(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerSessionEnergySensor state, unique_id, unit, and device info."""
     vue_dev, charger_dev = mock_evse_device
@@ -89,7 +89,7 @@ async def test_evse_session_energy_sensor_metrics_and_device_info(
 
 
 async def test_evse_charging_current_sensor_metrics_and_device_info(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerCurrentSensor state, unique_id, unit, and device info."""
     vue_dev, charger_dev = mock_evse_device
@@ -134,7 +134,7 @@ async def test_evse_charging_current_sensor_metrics_and_device_info(
 
 
 async def test_evse_charging_power_sensor_metrics_and_device_info(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerPowerSensor state, unique_id, unit, and device info."""
     vue_dev, charger_dev = mock_evse_device
@@ -180,7 +180,7 @@ async def test_evse_charging_power_sensor_metrics_and_device_info(
 
 async def test_evse_session_cost_sensor_metrics_and_device_info(
     hass: HomeAssistant,
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerSessionCostSensor state, unique_id, unit, and device info."""
     vue_dev, charger_dev = mock_evse_device
@@ -226,7 +226,7 @@ async def test_evse_session_cost_sensor_metrics_and_device_info(
 
 
 async def test_evse_plug_in_time_sensor_metrics_and_device_info(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerPlugInTimeSensor state, unique_id, device_class, and device info."""
     vue_dev, charger_dev = mock_evse_device
@@ -274,7 +274,7 @@ async def test_evse_plug_in_time_sensor_metrics_and_device_info(
 
 
 async def test_evse_sensor_async_setup_entry_registers_charger_sensors(
-    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, ChargerDevice]
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
 ) -> None:
     """Test sensor setup entry adds status, session energy, charging current, charging power, session cost, and plug-in time sensors."""
     vue_dev, charger_dev = mock_evse_device
@@ -329,7 +329,7 @@ async def test_evse_sensor_async_setup_entry_registers_charger_sensors(
 
 
 async def test_evse_session_sensors_offline_and_none_coordinator_data(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """All 5 session telemetry sensors transition unavailable when charger is offline."""
     vue_dev, charger_dev = mock_evse_device

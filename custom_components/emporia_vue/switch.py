@@ -77,7 +77,7 @@ async def async_setup_entry(
             load_gid = resolve_charger_load_gid(device, None, int_gid)
             load_name = device.device_name or device.display_name or "Smart plug"
             controllable_loads.append((load_gid, load_name, device))
-        elif device.ev_charger:
+        elif device.evse:
             switches.append(
                 EmporiaChargerSwitch(
                     coordinator,

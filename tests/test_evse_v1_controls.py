@@ -5,13 +5,18 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components.switch import SwitchDeviceClass
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
-from pyemvue.device import ChargerDevice, EvseControlStatus, VueDevice
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from pyemvue.device import EvseControlStatus, EVSEDevice, VueDevice
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.emporia_vue.button import (
+    EmporiaChargerFullPowerOverrideButton,
+)
 from custom_components.emporia_vue.const import (
     DOMAIN,
     ENABLE_1D,
@@ -27,8 +32,8 @@ from custom_components.emporia_vue.switch import EmporiaChargerSwitch
 
 
 @pytest.fixture
-def mock_evse_device() -> tuple[VueDevice, ChargerDevice]:
-    """Return a mock EVSE VueDevice and ChargerDevice pair."""
+def mock_evse_device() -> tuple[VueDevice, EVSEDevice]:
+    """Return a mock EVSE VueDevice and EVSEDevice pair."""
     vue_device = VueDevice(
         gid=1003,
         modelNum="EVSE-001",
@@ -38,19 +43,19 @@ def mock_evse_device() -> tuple[VueDevice, ChargerDevice]:
     vue_device.manufacturer_id = "MANUF-EVSE-1003"
     vue_device.parent_device_gid = 1001
 
-    charger_device = ChargerDevice(gid=1003, on=True)
+    charger_device = EVSEDevice(gid=1003, on=True)
     charger_device.charging_rate = 32
     charger_device.max_charging_rate = 48
     charger_device.status = "Charging"
     charger_device.message = "Vehicle Connected"
     charger_device.fault_text = None
 
-    vue_device.ev_charger = charger_device
+    vue_device.evse = charger_device
     return vue_device, charger_device
 
 
 async def test_evse_switch_v1_dispatch_and_legacy_fallback(
-    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, ChargerDevice]
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
 ) -> None:
     """Test EmporiaChargerSwitch uses V1 set_evse_state and falls back cleanly."""
     vue_dev, charger_dev = mock_evse_device
@@ -94,7 +99,7 @@ async def test_evse_switch_v1_dispatch_and_legacy_fallback(
 
 
 async def test_evse_current_number_v1_dispatch_and_legacy_fallback(
-    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, ChargerDevice]
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
 ) -> None:
     """Test EmporiaChargerCurrentNumber uses set_evse_settings and falls back cleanly."""
     vue_dev, charger_dev = mock_evse_device
@@ -132,7 +137,7 @@ async def test_evse_current_number_v1_dispatch_and_legacy_fallback(
 
 
 async def test_evse_status_sensor_session_attributes(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test EmporiaChargerStatusSensor enriches extra_state_attributes with session metrics."""
     vue_dev, charger_dev = mock_evse_device
@@ -172,7 +177,7 @@ async def test_evse_status_sensor_session_attributes(
 
 
 async def test_evse_substatus_telemetry(
-    mock_evse_device: tuple[VueDevice, ChargerDevice],
+    mock_evse_device: tuple[VueDevice, EVSEDevice],
 ) -> None:
     """Test substatus on status sensor with active charging and paused states."""
     vue_dev, charger_dev = mock_evse_device
@@ -207,7 +212,7 @@ async def test_evse_substatus_telemetry(
 
 
 async def test_evse_sensor_async_setup_entry_registers_status_sensor(
-    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, ChargerDevice]
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
 ) -> None:
     """Test sensor setup entry adds status sensor."""
     vue_dev, charger_dev = mock_evse_device
@@ -242,7 +247,7 @@ async def test_evse_sensor_async_setup_entry_registers_status_sensor(
 
 
 async def test_evse_coordinator_device_status_and_service_call(
-    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, ChargerDevice]
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
 ) -> None:
     """Test real __init__ device_status coordinator, error recovery, and set_charger_current service."""
     import custom_components.emporia_vue as ev
@@ -385,3 +390,40 @@ async def test_evse_coordinator_device_status_and_service_call(
                 await res
         ev.DEVICE_GIDS.clear()
         ev.DEVICE_INFORMATION.clear()
+
+
+async def test_canonical_evse_migration_no_deprecation_warnings(
+    hass: HomeAssistant, mock_evse_device: tuple[VueDevice, EVSEDevice]
+) -> None:
+    """Verify EVSE entities use canonical EVSEDevice and device.evse without DeprecationWarning."""
+    import warnings
+
+    vue_dev, evse_dev = mock_evse_device
+    assert vue_dev.evse is evse_dev
+
+    entry = MockConfigEntry(domain=DOMAIN, data={"email": "test@example.com"})
+    entry.add_to_hass(hass)
+    coord = DataUpdateCoordinator(
+        hass, MagicMock(), name="test_evse_canonical", config_entry=entry
+    )
+    coord.data = {"1003": evse_dev}
+    vue_mock = MagicMock()
+    vue_mock.set_evse_state.return_value = True
+    vue_mock.set_evse_settings.return_value = True
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always", DeprecationWarning)
+        switch_ent = EmporiaChargerSwitch(
+            coord, vue_mock, vue_dev, None, SwitchDeviceClass.OUTLET, {1003: vue_dev}
+        )
+        num_ent = EmporiaChargerCurrentNumber(coord, vue_mock, vue_dev)
+        btn_ent = EmporiaChargerFullPowerOverrideButton(coord, vue_mock, vue_dev)
+        status_ent = EmporiaChargerStatusSensor(coord, vue_dev, {1003: vue_dev})
+
+        assert switch_ent.target_load_gid == 1003
+        assert num_ent.native_max_value == 48.0
+        assert btn_ent.available is False
+        assert status_ent.native_value == "Charging"
+
+    dep_warnings = [w for w in recorded if issubclass(w.category, DeprecationWarning)]
+    assert dep_warnings == []
