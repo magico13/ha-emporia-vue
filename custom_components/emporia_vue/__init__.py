@@ -2,15 +2,31 @@
 
 import asyncio
 import calendar
+import logging
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta, tzinfo
 from functools import partial
-import logging
-import re
 from typing import Any
 
 import dateutil.relativedelta
 import dateutil.tz
+import requests
+import voluptuous as vol
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+    ServiceValidationError,
+)
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pyemvue import PyEmVue
 from pyemvue.device import (
     ChargerDevice,
@@ -20,22 +36,9 @@ from pyemvue.device import (
     VueDeviceChannelUsage,
     VueUsageDevice,
 )
-from pyemvue.enums import Scale
-import requests
-import voluptuous as vol
+from pyemvue.enums import Scale, Unit
 
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, State
-from homeassistant.exceptions import (
-    ConfigEntryAuthFailed,
-    ConfigEntryNotReady,
-    HomeAssistantError,
-)
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
+from .charger_entity import resolve_charger_device_id
 from .cognito_compat import apply_cognito_compat
 from .const import (
     AUTH_METHOD,
@@ -58,7 +61,8 @@ apply_cognito_compat()
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "switch", "number"]
+PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]
+SPLIT_PHASE_MAINS_CHANNELS = ("Mains_A", "Mains_B", "Mains_C")
 SENSITIVE_CONFIG_KEYS = {
     CONF_PASSWORD,
     CONF_ID_TOKEN,
@@ -92,6 +96,499 @@ def redact_config_data(data: Mapping[str, Any]) -> dict[str, Any]:
         key: "***" if key in SENSITIVE_CONFIG_KEYS else value
         for key, value in data.items()
     }
+
+
+async def _async_discover_devices(
+    vue: PyEmVue, loop: asyncio.AbstractEventLoop
+) -> list[VueDevice]:
+    """Discover Emporia devices via V1 endpoint with runtime fallback to legacy."""
+    devices: list[VueDevice] = []
+    if hasattr(vue, "get_devices_v1"):
+        try:
+            devices = await loop.run_in_executor(None, vue.get_devices_v1)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "V1 device discovery failed, falling back to legacy get_devices: %s",
+                err,
+            )
+            devices = []
+    if not devices:
+        devices = await loop.run_in_executor(None, vue.get_devices)
+    return devices
+
+
+def _merge_discovered_devices(
+    devices: list[VueDevice],
+    device_gids: list[str],
+    device_information: dict[int, VueDevice],
+) -> None:
+    """Populate global device lists, deduplicating channels and merging device attachments."""
+    for device in devices:
+        for channel in device.channels:
+            if not channel.device_gid:
+                channel.device_gid = device.device_gid
+        if str(device.device_gid) not in device_gids:
+            device_gids.append(str(device.device_gid))
+            _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
+            device_information[device.device_gid] = device
+        else:
+            existing = device_information[device.device_gid]
+            existing_nums = {ch.channel_num for ch in existing.channels}
+            for channel in device.channels:
+                if channel.channel_num not in existing_nums:
+                    existing.channels.append(channel)
+                    existing_nums.add(channel.channel_num)
+            if not getattr(existing, "outlet", None) and getattr(
+                device, "outlet", None
+            ):
+                existing.outlet = device.outlet
+            if not getattr(existing, "ev_charger", None) and getattr(
+                device, "ev_charger", None
+            ):
+                existing.ev_charger = device.ev_charger
+            if not getattr(existing, "evse", None) and getattr(device, "evse", None):
+                existing.evse = device.evse
+
+
+def _resolve_device_name(device: VueDevice) -> str:
+    """Resolve displayable hardware name with safe fallback chain."""
+    return (
+        device.device_name
+        or getattr(device, "display_name", None)
+        or device.model
+        or f"Vue Device {device.device_gid}"
+    )
+
+
+def _resolve_parent_device_gids(device_information: dict[int, VueDevice]) -> None:
+    """Cross-resolve parent_device_gid from parent_device_id using both device_id and manufacturer_id."""
+    devices_by_id: dict[str, VueDevice] = {}
+    for d in device_information.values():
+        if dev_id := getattr(d, "device_id", None):
+            devices_by_id[dev_id] = d
+        if manuf_id := getattr(d, "manufacturer_id", None):
+            devices_by_id[manuf_id] = d
+    for d in device_information.values():
+        parent_id = getattr(d, "parent_device_id", None)
+        if (
+            (not getattr(d, "parent_device_gid", None) or d.parent_device_gid == 0)
+            and parent_id
+            and parent_id in devices_by_id
+        ):
+            d.parent_device_gid = devices_by_id[parent_id].device_gid
+
+
+SYNTHETIC_VIRTUAL_CIRCUITS: dict[str, str] = {
+    "Balance": "Virtual circuit (Balance)",
+    "TotalUsage": "Virtual circuit (Total usage)",
+    "MainsFromGrid": "Virtual circuit (Mains from grid)",
+    "MainsToGrid": "Virtual circuit (Mains to grid)",
+}
+
+
+def determine_circuit_model(
+    channel: VueDeviceChannel, device: VueDevice | None = None
+) -> str:
+    """Return a descriptive circuit model for a physical CT or virtual channel."""
+    num = str(channel.channel_num or "")
+    if num in SYNTHETIC_VIRTUAL_CIRCUITS:
+        return SYNTHETIC_VIRTUAL_CIRCUITS[num]
+
+    # Merged Virtual Circuit constituent branch discovery (virtual channels e.g. Merged_100)
+    if num.startswith("Merged_"):
+        if device and device.channels:
+            member_branches = [
+                ch.channel_num
+                for ch in device.channels
+                if (
+                    ch.parent_channel_id in (num, channel.channel_id)
+                    or ch.parent_channel_num in (num, channel.channel_id)
+                )
+                and ch.channel_num.isdigit()
+            ]
+            if member_branches:
+                sorted_branches = sorted(member_branches, key=int)
+                return f"Merged virtual circuit (Branches {', '.join(sorted_branches)})"
+        return "Merged virtual circuit"
+
+    raw_class = (
+        getattr(channel, "channel_classification", None)
+        or getattr(channel, "type", None)
+        or ""
+    )
+    classification = str(raw_class).strip().lower()
+
+    if "main" in classification or num in ("1,2,3", "Mains_A", "Mains_B", "Mains_C"):
+        return "Main CT circuit"
+    if (
+        "200" in classification
+        or "two_hundred" in classification
+        or "twohundred" in classification
+    ):
+        return "200A CT circuit"
+    if "merged" in classification:
+        return (
+            f"Merged CT circuit (Branch {num})"
+            if num.isdigit()
+            else "Merged CT circuit"
+        )
+
+    if num.isdigit():
+        return f"50A CT circuit (Branch {num})"
+
+    return "50A CT circuit"
+
+
+def get_device_depth(d: VueDevice, device_info_map: dict[int, VueDevice]) -> int:
+    """Compute nesting depth of a device so parent devices are registered first."""
+    depth = 0
+    curr = d
+    visited = {curr.device_gid}
+    parent_gid = curr.parent_device_gid
+    while parent_gid and parent_gid != 0 and parent_gid in device_info_map:
+        if parent_gid in visited:
+            break
+        visited.add(parent_gid)
+        depth += 1
+        curr = device_info_map[parent_gid]
+        parent_gid = curr.parent_device_gid
+    return depth
+
+
+def sync_child_device_disabled_state(
+    dev_reg: dr.DeviceRegistry,
+    child_dev: dr.DeviceEntry,
+    parent_dev: dr.DeviceEntry | None,
+) -> bool:
+    """Mirror parent device disabled state onto child devices. Return True if changed."""
+    if not parent_dev:
+        return False
+    if parent_dev.disabled_by and child_dev.disabled_by is None:
+        dev_reg.async_update_device(
+            child_dev.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
+        )
+        return True
+    if (
+        not parent_dev.disabled_by
+        and child_dev.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+    ):
+        dev_reg.async_update_device(child_dev.id, disabled_by=None)
+        return True
+    return False
+
+
+def sync_device_disabled_cascade(
+    dev_reg: dr.DeviceRegistry,
+    entry_id: str,
+    parent_id: str,
+    parent_disabled: bool,
+    _visited: set[str] | None = None,
+) -> None:
+    """Recursively cascade parent disabled state down the via_device_id hierarchy."""
+    if _visited is None:
+        _visited = set()
+    if parent_id in _visited:
+        return
+    _visited.add(parent_id)
+
+    devices = (
+        dr.async_entries_for_config_entry(dev_reg, entry_id)
+        if hasattr(dr, "async_entries_for_config_entry")
+        else list(dev_reg.devices.values())
+    )
+    for child in devices:
+        if child.via_device_id == parent_id:
+            if parent_disabled and child.disabled_by is None:
+                dev_reg.async_update_device(
+                    child.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
+                )
+                sync_device_disabled_cascade(
+                    dev_reg, entry_id, child.id, True, _visited
+                )
+            elif (
+                not parent_disabled
+                and child.disabled_by == dr.DeviceEntryDisabler.INTEGRATION
+            ):
+                dev_reg.async_update_device(child.id, disabled_by=None)
+                sync_device_disabled_cascade(
+                    dev_reg, entry_id, child.id, False, _visited
+                )
+
+
+def async_register_device_registry_listener(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Register event listener to cascade parent disable states in real time."""
+    is_cascading = False
+
+    @callback
+    def _async_handle_device_registry_update(
+        event: Event[dr.EventDeviceRegistryUpdatedData],
+    ) -> None:
+        """Handle real-time device registry updates to cascade disabled state."""
+        nonlocal is_cascading
+        if is_cascading:
+            return
+        if event.data.get("action") != "update":
+            return
+        changes = event.data.get("changes", {})
+        if "disabled_by" not in changes:
+            return
+
+        device_id = event.data.get("device_id")
+        if not device_id:
+            return
+        dev_reg = dr.async_get(hass)
+        updated_dev = dev_reg.async_get(device_id)
+        dev_entry_id = getattr(updated_dev, "config_entry_id", None)
+        dev_entries = getattr(updated_dev, "config_entries", set())
+        if not updated_dev or (
+            dev_entry_id != entry.entry_id and entry.entry_id not in dev_entries
+        ):
+            return
+
+        is_cascading = True
+        try:
+            # If child was manually enabled while its parent remains disabled, keep INTEGRATION disable
+            if not updated_dev.disabled_by and updated_dev.via_device_id:
+                parent_dev = dev_reg.async_get(updated_dev.via_device_id)
+                if parent_dev and parent_dev.disabled_by:
+                    dev_reg.async_update_device(
+                        updated_dev.id,
+                        disabled_by=dr.DeviceEntryDisabler.INTEGRATION,
+                    )
+                    return
+
+            sync_device_disabled_cascade(
+                dev_reg,
+                entry.entry_id,
+                updated_dev.id,
+                bool(updated_dev.disabled_by),
+            )
+        finally:
+            is_cascading = False
+
+    entry.async_on_unload(
+        hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_handle_device_registry_update
+        )
+    )
+
+
+def async_setup_device_registry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_info_map: dict[int, VueDevice],
+) -> None:
+    """Register physical devices and CT circuit sub-devices in device registry."""
+    dev_reg = dr.async_get(hass)
+
+    def _lookup_device_entry(ident: tuple[str, str]) -> dr.DeviceEntry | None:
+        """Lookup device entry by identifier respecting Core 2026+ standards."""
+        if hasattr(dev_reg, "async_get_device_by_identifier"):
+            return dev_reg.async_get_device_by_identifier(ident, entry.entry_id)
+        return dev_reg.async_get_device(identifiers={ident})
+
+    # Pass 1: Hardware Physical Devices
+    # Sort topologically so root monitors are registered before child monitors/EVSEs
+    sorted_physical_devices = sorted(
+        device_info_map.values(),
+        key=lambda d: get_device_depth(d, device_info_map),
+    )
+    for device in sorted_physical_devices:
+        parent_gid = device.parent_device_gid
+        parent_entry = (
+            _lookup_device_entry((DOMAIN, f"{parent_gid}-1,2,3"))
+            if parent_gid and parent_gid != 0 and parent_gid != device.device_gid
+            else None
+        )
+        device_name = _resolve_device_name(device)
+        child_dev = dev_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{device.device_gid}-1,2,3")},
+            name=device_name,
+            model=device.model,
+            sw_version=device.firmware,
+            manufacturer="Emporia",
+            serial_number=str(device.manufacturer_id)
+            if device.manufacturer_id
+            else None,
+            via_device_id=parent_entry.id if parent_entry else None,
+        )
+        sync_child_device_disabled_state(dev_reg, child_dev, parent_entry)
+
+    # Pass 2: CT Circuit Sub-Devices
+    for device in device_info_map.values():
+        if not device.channels:
+            continue
+        device_name = _resolve_device_name(device)
+        parent_entry = _lookup_device_entry((DOMAIN, f"{device.device_gid}-1,2,3"))
+        for channel in device.channels:
+            if channel.has_data is False:
+                continue
+            if (
+                channel.channel_num == "1,2,3"
+                or channel.channel_num in SPLIT_PHASE_MAINS_CHANNELS
+            ):
+                continue
+
+            circuit_name = channel.name
+            translation_key = None
+            translation_placeholders = None
+            if not circuit_name:
+                if channel.channel_num.isdigit():
+                    circuit_name = f"{device_name} circuit {channel.channel_num}"
+                    translation_key = "circuit"
+                    translation_placeholders = {
+                        "device_name": device_name,
+                        "channel_number": str(channel.channel_num),
+                    }
+                else:
+                    circuit_name = f"{device_name} {channel.channel_num}"
+
+            ct_dev = dev_reg.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, f"{device.device_gid}-{channel.channel_num}")},
+                name=circuit_name,
+                model=determine_circuit_model(channel, device),
+                model_id=None,
+                sw_version=device.firmware,
+                manufacturer="Emporia",
+                via_device_id=parent_entry.id if parent_entry else None,
+                translation_key=translation_key,
+                translation_placeholders=translation_placeholders,
+            )
+            sync_child_device_disabled_state(dev_reg, ct_dev, parent_entry)
+
+    # Pass 2b: Link existing unlinked sub-devices to their parent monitor via_device_id
+    # Captures preserved unused CT devices from prior versions or user customizations,
+    # merged circuits, and virtual circuits.
+    existing_devices = (
+        dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+        if hasattr(dr, "async_entries_for_config_entry")
+        else list(dev_reg.devices.values())
+    )
+    for dev_entry in existing_devices:
+        for domain, ident in dev_entry.identifiers:
+            if domain == DOMAIN and "-" in ident:
+                gid_part, ch_part = ident.split("-", 1)
+                if (
+                    gid_part.isdigit()
+                    and ch_part
+                    not in (
+                        "1,2,3",
+                        "1,2",
+                        "1,3",
+                        "2,3",
+                        "Mains_A",
+                        "Mains_B",
+                        "Mains_C",
+                    )
+                    and not dev_entry.via_device_id
+                ):
+                    parent = _lookup_device_entry((DOMAIN, f"{gid_part}-1,2,3"))
+                    if parent and parent.id != dev_entry.id:
+                        dev_reg.async_update_device(
+                            dev_entry.id, via_device_id=parent.id
+                        )
+
+    # Pass 3: Cascade disabled state across full via_device_id hierarchy (including virtual circuits)
+    for device in sorted_physical_devices:
+        ident = (DOMAIN, f"{device.device_gid}-1,2,3")
+        parent_dev = _lookup_device_entry(ident)
+        if parent_dev:
+            sync_device_disabled_cascade(
+                dev_reg,
+                entry.entry_id,
+                parent_dev.id,
+                bool(parent_dev.disabled_by),
+            )
+
+
+def async_prune_stale_devices(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_info_map: dict[int, VueDevice],
+) -> None:
+    """Safely remove stale dummy circuit devices from Device Registry."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    inactive_identifiers: set[tuple[str, str]] = set()
+    for device in device_info_map.values():
+        if not device.channels:
+            continue
+        for channel in device.channels:
+            if channel.channel_num != "1,2,3" and channel.has_data is False:
+                inactive_identifiers.add(
+                    (DOMAIN, f"{device.device_gid}-{channel.channel_num}")
+                )
+
+    if not inactive_identifiers:
+        return
+
+    existing_devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+    for device_entry in existing_devices:
+        matching_inactive = any(
+            ident in inactive_identifiers for ident in device_entry.identifiers
+        )
+        if not matching_inactive:
+            continue
+
+        # Preserve if user customized the device
+        if device_entry.name_by_user is not None:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user-customized name",
+                device_entry.id,
+            )
+            continue
+        if device_entry.area_id is not None:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to assigned area",
+                device_entry.id,
+            )
+            continue
+        if device_entry.labels:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user labels",
+                device_entry.id,
+            )
+            continue
+
+        # Check if any entity under this device was customized/disabled/hidden by the user
+        device_entities = er.async_entries_for_device(
+            ent_reg, device_entry.id, include_disabled_entities=True
+        )
+        has_user_customized_entity = any(
+            entity.disabled_by == er.RegistryEntryDisabler.USER
+            or entity.hidden_by == er.RegistryEntryHider.USER
+            or entity.name is not None
+            or entity.icon is not None
+            or entity.area_id is not None
+            or bool(entity.labels)
+            for entity in device_entities
+        )
+        if has_user_customized_entity:
+            _LOGGER.debug(
+                "Preserving inactive device %s due to user-customized entity",
+                device_entry.id,
+            )
+            continue
+
+        for entity in device_entities:
+            _LOGGER.info(
+                "Pruning inactive entity %s from device %s",
+                entity.entity_id,
+                device_entry.id,
+            )
+            ent_reg.async_remove(entity.entity_id)
+
+        _LOGGER.info(
+            "Pruning inactive uncustomized dummy device %s (%s)",
+            device_entry.id,
+            device_entry.identifiers,
+        )
+        dev_reg.async_remove_device(device_entry.id)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -150,6 +647,7 @@ async def async_login_vue(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Emporia Vue from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
     global DEVICE_GIDS
     global DEVICE_INFORMATION
     global INVERT_SOLAR
@@ -158,7 +656,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LAST_DAY_INTEGRATED_MINUTE.clear()
     LAST_MONTH_INTEGRATED_MINUTE.clear()
 
-    entry_data = entry.data
+    entry_data = {**entry.data, **entry.options}
     _LOGGER.debug(
         "Setting up Emporia Vue with entry data: %s",
         redact_config_data(entry_data),
@@ -177,7 +675,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # pylint: disable=broad-exception-caught
         raise ConfigEntryNotReady(f"Failed to login to Emporia Vue: {err}") from err
 
-    if entry_data.get(AUTH_METHOD) == AUTH_METHOD_TOKENS and vue.auth and vue.auth.tokens:
+    if (
+        entry_data.get(AUTH_METHOD) == AUTH_METHOD_TOKENS
+        and vue.auth
+        and vue.auth.tokens
+    ):
         # Persist the tokens refreshed during login back to the config entry so
         # that the stored tokens stay current across restarts.
         hass.config_entries.async_update_entry(
@@ -207,14 +709,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vue.auth.token_updater = _token_updater
 
     try:
-        devices: list[VueDevice] = await loop.run_in_executor(None, vue.get_devices)
-        for device in devices:
-            if str(device.device_gid) not in DEVICE_GIDS:
-                DEVICE_GIDS.append(str(device.device_gid))
-                _LOGGER.info("Adding gid %s to DEVICE_GIDS list", device.device_gid)
-                DEVICE_INFORMATION[device.device_gid] = device
-            else:
-                DEVICE_INFORMATION[device.device_gid].channels += device.channels
+        devices: list[VueDevice] = await _async_discover_devices(vue, loop)
+        _merge_discovered_devices(devices, DEVICE_GIDS, DEVICE_INFORMATION)
+
+        # Cross-resolve parent_device_gid if parent_device_id is provided
+        _resolve_parent_device_gids(DEVICE_INFORMATION)
 
         total_channels = 0
         for device in DEVICE_INFORMATION.values():
@@ -224,6 +723,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(DEVICE_INFORMATION.keys()),
             total_channels,
         )
+
+        # Query sites for dynamic location metadata mapping
+        site_map: dict[int, str] = {}
+
+        async def _async_refresh_sites(_now: datetime | None = None) -> None:
+            """Fetch sites and sync site_map and device site_gid assignments."""
+            if not hasattr(vue, "get_sites"):
+                return
+            try:
+                sites = await loop.run_in_executor(None, vue.get_sites)
+                _populate_site_map_and_assign_devices(
+                    sites, site_map, DEVICE_INFORMATION
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Failed to refresh sites from Emporia: %s", err)
+
+        await _async_refresh_sites()
+
+        # Safely prune stale uncustomized dummy CT circuit devices from Device Registry
+        async_prune_stale_devices(hass, entry, DEVICE_INFORMATION)
+
+        # Pre-register device hierarchy in Device Registry
+        async_setup_device_registry(hass, entry, DEVICE_INFORMATION)
+
+        async_register_device_registry_listener(hass, entry)
 
         async def async_update_data_1min() -> dict:
             """Fetch data from API endpoint at a 1 minute interval.
@@ -282,7 +806,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             global LAST_MONTH_UPDATE
             global LAST_MONTH_DATA
             now: datetime = datetime.now(UTC)
-            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(minutes=30):
+            if not LAST_MONTH_UPDATE or (now - LAST_MONTH_UPDATE) > timedelta(
+                minutes=30
+            ):
                 _LOGGER.info("Updating month sensors")
                 LAST_MONTH_UPDATE = now
                 updated_month_data = await update_sensors(vue, [Scale.MONTH.value])
@@ -298,7 +824,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if LAST_MINUTE_DATA:
                     for identifier, data in LAST_MINUTE_DATA.items():
                         device_gid, channel_gid, _ = identifier.split("-")
-                        month_id: str = f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                        month_id: str = (
+                            f"{device_gid}-{channel_gid}-{Scale.MONTH.value}"
+                        )
                         if (
                             data
                             and LAST_MONTH_DATA
@@ -313,7 +841,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 LAST_MONTH_INTEGRATED_MINUTE, month_id, timestamp
                             ):
                                 continue
-                            await check_for_new_month(timestamp, int(device_gid), month_id)
+                            await check_for_new_month(
+                                timestamp, int(device_gid), month_id
+                            )
 
                             LAST_MONTH_DATA[month_id]["usage"] += data[
                                 "usage"
@@ -335,6 +865,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="minute telemetry",
                 update_method=minute_update_method,
@@ -356,6 +887,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_1mon = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="monthly telemetry",
                 update_method=monthly_update_method,
@@ -378,6 +910,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator_day_sensor = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 # Name of the data. For logging purposes.
                 name="daily telemetry",
                 update_method=daily_update_method,
@@ -388,8 +921,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Check if any devices have outlets or chargers
         has_controllable_devices = any(
-            device.outlet or device.ev_charger
-            for device in DEVICE_INFORMATION.values()
+            device.outlet or device.ev_charger for device in DEVICE_INFORMATION.values()
         )
 
         async def async_update_device_status() -> dict[str, Any]:
@@ -399,23 +931,83 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 outlets: list[OutletDevice]
                 chargers: list[ChargerDevice]
 
-                outlets, chargers = await hass.async_add_executor_job(vue.get_devices_status)
+                outlets, chargers = await hass.async_add_executor_job(
+                    vue.get_devices_status
+                )
+
+                excess_monitors = None
+                excess_solar_by_device_id: dict[str, Any] = {}
+                if (outlets or chargers) and hasattr(
+                    vue, "get_excess_generation_monitors"
+                ):
+                    try:
+                        excess_monitors = await hass.async_add_executor_job(
+                            vue.get_excess_generation_monitors
+                        )
+                        if excess_monitors and excess_monitors.monitors:
+                            for mon in excess_monitors.monitors:
+                                try:
+                                    em_eg = await hass.async_add_executor_job(
+                                        vue.get_excess_generation, mon.device_id
+                                    )
+                                    if em_eg:
+                                        excess_solar_by_device_id[mon.device_id] = em_eg
+                                except Exception as err:  # noqa: BLE001
+                                    _LOGGER.debug(
+                                        "Failed to fetch excess generation for monitor %s: %s",
+                                        mon.device_id,
+                                        err,
+                                    )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "Failed to fetch excess generation monitors: %s",
+                            err,
+                        )
+
+                data["excess_monitors"] = excess_monitors
+                data["excess_solar_by_device_id"] = excess_solar_by_device_id
 
                 if outlets:
                     for outlet in outlets:
+                        outlet.excess_monitors = excess_monitors
+                        outlet.excess_solar_by_device_id = excess_solar_by_device_id
                         data[str(outlet.device_gid)] = outlet
                 if chargers:
                     for charger in chargers:
+                        charger.excess_monitors = excess_monitors
+                        charger.excess_solar_by_device_id = excess_solar_by_device_id
+                        charger.evse_control = None
+                        if hasattr(vue, "get_evse_control"):
+                            dev_id = resolve_charger_device_id(
+                                DEVICE_INFORMATION.get(charger.device_gid),
+                                charger,
+                                charger.device_gid,
+                            )
+                            try:
+                                charger.evse_control = (
+                                    await hass.async_add_executor_job(
+                                        vue.get_evse_control, dev_id
+                                    )
+                                )
+                            except Exception as err:  # noqa: BLE001
+                                _LOGGER.debug(
+                                    "Failed to fetch EVSE control status for %s: %s",
+                                    dev_id,
+                                    err,
+                                )
                         data[str(charger.device_gid)] = charger
                 return data
             except Exception as err:
-                raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+                raise UpdateFailed(
+                    f"Error communicating with Emporia API: {err}"
+                ) from err
 
         coordinator_device_status = None
         if has_controllable_devices:
             coordinator_device_status = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
+                config_entry=entry,
                 name="device_status",
                 update_method=async_update_device_status,
                 update_interval=timedelta(minutes=1),
@@ -430,8 +1022,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 str(call.service),
                 str(call.data),
             )
-            current = call.data.get("current")
-            current = int(current)
+            raw_current = call.data.get("current")
+            if raw_current is None:
+                raise ServiceValidationError("Charging current is required.")
+            try:
+                current = int(raw_current)
+            except (TypeError, ValueError) as err:
+                raise ServiceValidationError(
+                    f"Invalid charging current: {raw_current}"
+                ) from err
+
             device_id: str | list[str] | None = call.data.get("device_id", None)
             entity_id: str | list[str] | None = call.data.get("entity_id", None)
 
@@ -459,12 +1059,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             elif entity_id:
                 charger_entity = entity_registry.async_get(entity_id[0])
             if not charger_entity:
-                raise HomeAssistantError("Target device or Entity required.")
+                raise ServiceValidationError("Target device or Entity required.")
 
             unique_entity_id: str = charger_entity.unique_id
             gid_match: re.Match[str] | None = re.search(r"\d+", unique_entity_id)
             if not gid_match:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find device gid from unique id {unique_entity_id}"
                 )
 
@@ -473,7 +1073,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 charger_gid not in DEVICE_INFORMATION
                 or not DEVICE_INFORMATION[charger_gid].ev_charger
             ):
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     "Set Charging Current called on invalid device with entity id"
                     f" {charger_entity.entity_id} (unique id {unique_entity_id})"
                 )
@@ -481,46 +1081,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             state = hass.states.get(charger_entity.entity_id)
             _LOGGER.info("State is %s", str(state))
             if not state:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find state for entity {charger_entity.entity_id}"
                 )
             charger_info: VueDevice = DEVICE_INFORMATION[charger_gid]
             if charger_info.ev_charger is None:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     f"Could not find charger info for device {charger_gid}"
                 )
             # Scale the current to a minimum of 6 amps and max of the circuit max
-            current: int = max(6, current)
+            current = max(6, current)
             current = min(current, charger_info.ev_charger.max_charging_rate)
             _LOGGER.info(
                 "Setting charger %s to current of %d amps", charger_gid, current
             )
 
             try:
-                updated_charger: ChargerDevice = await loop.run_in_executor(
-                    None,
-                    vue.update_charger,
-                    charger_info.ev_charger,
-                    state.state == "on",
-                    current,
+                dev_id = resolve_charger_device_id(
+                    charger_info, charger_info.ev_charger, charger_gid
                 )
-                DEVICE_INFORMATION[charger_gid].ev_charger = updated_charger
-                # update the state of the charger entity using the updated data
-                state: State | None = hass.states.get(charger_entity.entity_id)
-                if state:
-                    new_state: str = "on" if updated_charger.charger_on else "off"
-                    new_attributes: dict = state.attributes.copy()
-                    new_attributes["charging_rate"] = updated_charger.charging_rate
-                    # good enough for now, update the state in the registry
-                    hass.states.async_set(
-                        charger_entity.entity_id, new_state, new_attributes
+                if hasattr(vue, "set_evse_settings"):
+                    await loop.run_in_executor(
+                        None,
+                        vue.set_evse_settings,
+                        dev_id,
+                        current,
                     )
+                else:
+                    await loop.run_in_executor(
+                        None,
+                        vue.update_charger,
+                        charger_info.ev_charger,
+                        state.state == "on",
+                        current,
+                    )
+                if coordinator_device_status:
+                    await coordinator_device_status.async_request_refresh()
 
             except requests.exceptions.HTTPError as err:
                 _LOGGER.error(
                     "Error updating charger status: %s \nResponse body: %s",
                     err,
-                    err.response.text,
+                    err.response.text
+                    if getattr(err, "response", None) is not None
+                    else "",
                 )
                 raise
 
@@ -542,6 +1146,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_device_status": coordinator_device_status,
         "device_information": DEVICE_INFORMATION,
         "retry_update_methods": retry_update_methods,
+        "site_map": site_map,
     }
 
     try:
@@ -550,7 +1155,66 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Error setting up platforms: %s", err)
         raise ConfigEntryNotReady(f"Error setting up platforms: {err}") from err
 
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            _async_refresh_sites,
+            timedelta(hours=1),
+            name=f"{DOMAIN}_sites_refresh",
+            cancel_on_shutdown=True,
+        )
+    )
+
     return True
+
+
+def _populate_site_map_and_assign_devices(
+    sites: list[Any] | None,
+    site_map: dict[int, str],
+    device_information: Mapping[int, VueDevice],
+) -> None:
+    """Populate site_map in-place from sites and sync device site_gid assignments."""
+    if sites is None:
+        return
+
+    site_map.clear()
+    device_site_lookup: dict[str, int] = {}
+    for site in sites:
+        sgid = getattr(site, "site_gid", None)
+        if sgid is None:
+            continue
+        int_sgid = int(sgid)
+        site_map[int_sgid] = getattr(site, "display_name", "") or ""
+        for did in getattr(site, "device_ids", None) or []:
+            if did not in (None, ""):
+                device_site_lookup[str(did)] = int_sgid
+
+    for dev in device_information.values():
+        dev_identifiers = {
+            str(x)
+            for x in (
+                dev.device_gid,
+                getattr(dev, "manufacturer_id", None),
+                getattr(dev, "device_id", None),
+            )
+            if x not in (None, "")
+        }
+        matched_sgid = next(
+            (
+                device_site_lookup[did]
+                for did in dev_identifiers
+                if did in device_site_lookup
+            ),
+            None,
+        )
+        if matched_sgid is not None:
+            dev.site_gid = matched_sgid
+
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -569,6 +1233,100 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow deleting inactive or orphaned devices from the device registry."""
+    vue_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if (
+        not isinstance(vue_data, dict)
+        or "device_information" not in vue_data
+        or not isinstance(vue_data["device_information"], dict)
+    ):
+        dev_name = device_entry.name_by_user or device_entry.name or "device"
+        raise HomeAssistantError(
+            f"Cannot remove device '{dev_name}' while integration entry is not loaded."
+        )
+
+    device_info_map: dict[int, VueDevice] = vue_data["device_information"]
+
+    active_idents: set[str] = set()
+    for dev in device_info_map.values():
+        active_idents.add(f"{dev.device_gid}-1,2,3")
+        for ch in getattr(dev, "channels", []):
+            if getattr(ch, "has_data", None) is not False:
+                active_idents.add(f"{dev.device_gid}-{ch.channel_num}")
+
+    for coord_key in (
+        "coordinator_1min",
+        "coordinator_day_sensor",
+        "coordinator_1mon",
+    ):
+        coord = vue_data.get(coord_key)
+        coord_data = getattr(coord, "data", None) if coord else None
+        if isinstance(coord_data, dict):
+            for ch_data in coord_data.values():
+                if isinstance(ch_data, dict):
+                    gid = ch_data.get("device_gid")
+                    ch_num = ch_data.get("channel_num")
+                    if gid is not None and ch_num is not None:
+                        active_idents.add(f"{gid}-{ch_num}")
+
+    for dom, ident in device_entry.identifiers:
+        if dom == DOMAIN and ident in active_idents:
+            dev_name = device_entry.name_by_user or device_entry.name or "device"
+            raise HomeAssistantError(
+                f"Cannot remove active device '{dev_name}'. Only inactive or decommissioned devices can be deleted."
+            )
+
+    return True
+
+
+def fetch_device_usages(
+    vue: PyEmVue,
+    gids: list[str],
+    instant: datetime,
+    scale: str,
+    energy_unit: Any = None,
+) -> dict[int, VueUsageDevice]:
+    """Fetch device usages with v1 and legacy fallbacks."""
+    try:
+        scale_val = Scale(scale)
+    except ValueError:
+        scale_val = scale
+
+    if hasattr(vue, "get_device_list_usage_v1"):
+        try:
+            kwargs: dict[str, Any] = {}
+            if energy_unit is not None:
+                kwargs["energy_unit"] = energy_unit
+            res = vue.get_device_list_usage_v1(
+                device_gids=gids,
+                instant=instant,
+                scale=scale_val,
+                **kwargs,
+            )
+            if res:
+                return res
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("get_device_list_usage_v1 failed, trying fallback: %s", err)
+
+    if energy_unit == Unit.VOLTS:
+        return {}
+
+    for method_name in ("get_device_list_usage", "get_devices_usage"):
+        method = getattr(vue, method_name, None)
+        if method:
+            try:
+                res = method(gids, instant, scale)
+                if res:
+                    return res
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("%s failed: %s", method_name, err)
+
+    return {}
+
+
 async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
     """Fetch data from API endpoint."""
     try:
@@ -579,23 +1337,45 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
         for scale in scales:
             utcnow: datetime = datetime.now(UTC)
             usage_dict: dict[int, VueUsageDevice] = await loop.run_in_executor(
-                None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                None, fetch_device_usages, vue, DEVICE_GIDS, utcnow, scale
             )
             if not usage_dict:
                 _LOGGER.warning(
                     "No channels found during update for scale %s. Retrying", scale
                 )
                 usage_dict = await loop.run_in_executor(
-                    None, vue.get_device_list_usage, DEVICE_GIDS, utcnow, scale
+                    None, fetch_device_usages, vue, DEVICE_GIDS, utcnow, scale
                 )
             if usage_dict:
                 flattened, data_time = flatten_usage_data(usage_dict, scale)
+                flattened_voltage: dict[str, VueDeviceChannelUsage] = {}
+                if scale == Scale.MINUTE.value and hasattr(
+                    vue, "get_device_list_usage_v1"
+                ):
+                    try:
+                        voltage_dict = await loop.run_in_executor(
+                            None,
+                            fetch_device_usages,
+                            vue,
+                            DEVICE_GIDS,
+                            utcnow,
+                            scale,
+                            Unit.VOLTS,
+                        )
+                        if voltage_dict:
+                            flattened_voltage, _ = flatten_usage_data(
+                                voltage_dict, scale
+                            )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("Failed to fetch voltage telemetry: %s", err)
+
                 await parse_flattened_usage_data(
                     flattened,
                     scale,
                     data,
                     utcnow,
                     data_time,
+                    flattened_voltage,
                 )
             else:
                 raise UpdateFailed(f"No channels found during update for scale {scale}")
@@ -633,6 +1413,7 @@ async def parse_flattened_usage_data(
     data: dict[str, Any],
     requested_time: datetime,
     data_time: datetime,
+    flattened_voltage: dict[str, VueDeviceChannelUsage] | None = None,
 ) -> None:
     """Loop through the device list and find the corresponding update data."""
     unused_data: dict[str, VueDeviceChannelUsage] = flattened_data.copy()
@@ -650,6 +1431,9 @@ async def parse_flattened_usage_data(
             )
         for info_channel in info.channels:
             identifier: str = make_channel_id(info_channel, scale)
+            if info_channel.has_data is False:
+                unused_data.pop(identifier, None)
+                continue
             channel_num = info_channel.channel_num
             channel: VueDeviceChannelUsage | None = flattened_data.get(identifier)
             if not channel:
@@ -693,10 +1477,17 @@ async def parse_flattened_usage_data(
                 channel_num, fixed_usage, bidirectional, is_solar, INVERT_SOLAR
             )
 
+            channel_voltage: float | None = None
+            if flattened_voltage and identifier in flattened_voltage:
+                v_chan = flattened_voltage[identifier]
+                if v_chan.usage is not None:
+                    channel_voltage = float(v_chan.usage)
+
             data[identifier] = {
                 "device_gid": gid,
                 "channel_num": channel_num,
                 "usage": fixed_usage,
+                "voltage": channel_voltage,
                 "scale": scale,
                 "info": info,
                 "reset": reset_datetime,
@@ -718,7 +1509,12 @@ async def parse_flattened_usage_data(
         if channels_were_added:
             _LOGGER.info("Rerunning update due to added channels")
             await parse_flattened_usage_data(
-                flattened_data, scale, data, requested_time, data_time
+                flattened_data,
+                scale,
+                data,
+                requested_time,
+                data_time,
+                flattened_voltage,
             )
 
 
@@ -778,7 +1574,7 @@ def fix_usage_sign(
     is_solar: bool,
     invert_solar: bool,
 ) -> float:
-    """If the channel is not '1,2,3' or 'Balance' we need it to be positive.
+    """If the channel is not '1,2,3', split-phase mains legs, or 'Balance' we need it to be positive.
 
     Solar circuits are up to the user to decide. Positive is recommended for the energy dashboard.
 
@@ -790,7 +1586,16 @@ def fix_usage_sign(
             return -1 * usage
         return usage
 
-    if usage and not bidirectional and channel_num not in ["1,2,3", "Balance"]:
+    if (
+        usage
+        and not bidirectional
+        and channel_num
+        not in [
+            "1,2,3",
+            "Balance",
+            *SPLIT_PHASE_MAINS_CHANNELS,
+        ]
+    ):
         # With bidirectionality, we need to also check if bidirectional. If yes,
         # we either don't abs, or we flip the sign.
         return abs(usage)
@@ -871,10 +1676,11 @@ def determine_reset_datetime(
     if is_month:
         # Month should use the most recent billing_cycle_start_day midnight.
         # Never return a future reset datetime.
+        cycle_start = max(1, int(monthly_cycle_start)) if monthly_cycle_start else 1
         last_day_this_month = calendar.monthrange(
             reset_datetime.year, reset_datetime.month
         )[1]
-        target_day_this_month = min(monthly_cycle_start, last_day_this_month)
+        target_day_this_month = min(cycle_start, last_day_this_month)
         candidate_this_month = reset_datetime.replace(day=target_day_this_month)
 
         if local_time >= candidate_this_month:
@@ -886,9 +1692,7 @@ def determine_reset_datetime(
             last_day_previous_month = calendar.monthrange(
                 previous_month.year, previous_month.month
             )[1]
-            target_day_previous_month = min(
-                monthly_cycle_start, last_day_previous_month
-            )
+            target_day_previous_month = min(cycle_start, last_day_previous_month)
             reset_datetime = previous_month.replace(day=target_day_previous_month)
     return reset_datetime
 

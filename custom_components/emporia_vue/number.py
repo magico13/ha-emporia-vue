@@ -3,16 +3,15 @@
 import logging
 from typing import Any
 
-from pyemvue import PyEmVue
-from pyemvue.device import VueDevice
-from requests import exceptions
-
 from homeassistant.components.number import NumberDeviceClass, NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfElectricCurrent
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from pyemvue import PyEmVue
+from pyemvue.device import VueDevice
+from requests import exceptions
 
 from .charger_entity import EmporiaChargerEntity
 from .const import DOMAIN, VUE_DATA
@@ -27,25 +26,30 @@ async def async_setup_entry(
 ) -> None:
     """Set up the number platform."""
     vue: PyEmVue = hass.data[DOMAIN][config_entry.entry_id][VUE_DATA]
-    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator_device_status"
-    ]
+    coordinator: DataUpdateCoordinator | None = hass.data[DOMAIN][
+        config_entry.entry_id
+    ]["coordinator_device_status"]
     device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
         "device_information"
     ]
+    site_map: dict[int, str] = hass.data[DOMAIN][config_entry.entry_id].get(
+        "site_map", {}
+    )
 
     if coordinator is None or coordinator.data is None:
         return
 
     entities = []
     for gid in coordinator.data:
+        if not str(gid).isdigit():
+            continue
         int_gid = int(gid)
         if int_gid not in device_information:
             continue
         device = device_information[int_gid]
         if device.ev_charger:
             entities.append(
-                EmporiaChargerCurrentNumber(coordinator, vue, device)
+                EmporiaChargerCurrentNumber(coordinator, vue, device, site_map=site_map)
             )
 
     async_add_entities(entities)
@@ -59,6 +63,7 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
         coordinator: DataUpdateCoordinator[dict[str, Any]],
         vue: PyEmVue,
         device: VueDevice,
+        site_map: dict[int, Any] | None = None,
     ) -> None:
         """Initialize the number entity."""
         super().__init__(
@@ -67,6 +72,7 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
             device,
             UnitOfElectricCurrent.AMPERE,
             NumberDeviceClass.CURRENT,
+            site_map=site_map,
         )
         self._attr_native_min_value = 6.0
         self._attr_native_max_value = float(device.ev_charger.max_charging_rate)
@@ -92,18 +98,27 @@ class EmporiaChargerCurrentNumber(EmporiaChargerEntity, NumberEntity):  # type: 
         """Set the charger current limit."""
         current = int(value)
         current = max(6, min(current, int(self._attr_native_max_value)))
+        charger_data = self.coordinator.data.get(self._device_gid)
+        dev_id = self.device_id
         try:
-            await self.hass.async_add_executor_job(
-                self._vue.update_charger,
-                self.coordinator.data[self._device_gid],
-                self.coordinator.data[self._device_gid].charger_on,
-                current,
-            )
+            if hasattr(self._vue, "set_evse_settings"):
+                await self.hass.async_add_executor_job(
+                    self._vue.set_evse_settings,
+                    dev_id,
+                    current,
+                )
+            else:
+                await self.hass.async_add_executor_job(
+                    self._vue.update_charger,
+                    charger_data,
+                    charger_data.charger_on if charger_data else True,
+                    current,
+                )
         except exceptions.HTTPError as err:
             _LOGGER.error(
                 "Error updating charger current: %s \nResponse body: %s",
                 err,
-                err.response.text,
+                err.response.text if err.response is not None else "",
             )
             raise
         await self.coordinator.async_request_refresh()

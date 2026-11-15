@@ -1,18 +1,15 @@
 """Tests for cloud-interruption tolerance helpers."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
-from importlib.util import module_from_spec, spec_from_file_location
 import logging
+from datetime import UTC, datetime, timedelta
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pytest
 
 MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "emporia_vue"
-    / "resilience.py"
+    Path(__file__).parents[1] / "custom_components" / "emporia_vue" / "resilience.py"
 )
 SPEC = spec_from_file_location("emporia_vue_resilience", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -158,7 +155,7 @@ def test_rejects_negative_tolerance() -> None:
 
 def test_only_integrates_newer_minute_samples() -> None:
     """Cached or out-of-order minute samples must not be counted twice."""
-    timestamp = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 8, 4, 20, 0, tzinfo=UTC)
     integrated_samples = {"device-channel": timestamp}
 
     assert not is_newer_sample(integrated_samples, "device-channel", timestamp)
