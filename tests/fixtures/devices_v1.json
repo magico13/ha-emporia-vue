@@ -1,0 +1,689 @@
+{
+  "devices": [
+    {
+      "device_type": "MONITOR",
+      "device_id": "A2304A0000000000000004",
+      "energy_managements_configured": [],
+      "supported_energy_managements": [
+        "PEAK_DEMAND",
+        "POWER_SMART",
+        "EXCESS_SOLAR"
+      ],
+      "display_name": "Kelwood",
+      "site_gid": null,
+      "parent_device_id": null,
+      "parent_channel_id": null,
+      "time_zone": "America/Denver",
+      "latitude": 39.7392,
+      "longitude": -104.9903,
+      "utility_rate_gid": null,
+      "utility_rate_mods": null,
+      "billing_cycle_start_day": 1,
+      "usage_cent_per_kw_hour": 11.75,
+      "buyback_rate_cents_per_kwh": null,
+      "net_metering": null,
+      "device_gid": 1004,
+      "model": "VUE002",
+      "firmware": "Vue2-823",
+      "category": "MONITOR",
+      "channels": [
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains",
+          "parent_channel_id": null,
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_A",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_B",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_C",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": false
+        },
+        {
+          "name": "Main floor red",
+          "multiplier": 1.0,
+          "channel_type_gid": 21,
+          "channel_id": "Branch_1",
+          "parent_channel_id": "Merged_100",
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Main floor black",
+          "multiplier": 1.0,
+          "channel_type_gid": 21,
+          "channel_id": "Branch_2",
+          "parent_channel_id": "Merged_100",
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Basement heat",
+          "multiplier": 2.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_3",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Basement hot water",
+          "multiplier": 2.0,
+          "channel_type_gid": 22,
+          "channel_id": "Branch_4",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Basement Hot Water Booster",
+          "multiplier": 2.0,
+          "channel_type_gid": 22,
+          "channel_id": "Branch_5",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_6",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_7",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_8",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_9",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_10",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_11",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_12",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_13",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_14",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_15",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 18,
+          "channel_id": "Branch_16",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": "Main floor",
+          "multiplier": 1.0,
+          "channel_type_gid": 21,
+          "channel_id": "Merged_100",
+          "parent_channel_id": null,
+          "channel_classification": "MERGED",
+          "has_data": true
+        }
+      ],
+      "combined_vue": "NONE",
+      "primary_vue_device_id": null
+    },
+    {
+      "device_type": "EV_CHARGER",
+      "device_id": "D2301A0000000000000003",
+      "energy_managements_configured": [
+        "EXCESS_SOLAR"
+      ],
+      "supported_energy_managements": [
+        "LOAD_SHARING",
+        "EXCESS_SOLAR",
+        "POWER_SMART",
+        "PEAK_DEMAND"
+      ],
+      "display_name": "EV Charger",
+      "site_gid": null,
+      "parent_device_id": "A2237A0000000000000002",
+      "parent_channel_id": "Mains",
+      "time_zone": "America/Denver",
+      "latitude": 39.7392,
+      "longitude": -104.9903,
+      "utility_rate_gid": null,
+      "utility_rate_mods": null,
+      "billing_cycle_start_day": 1,
+      "usage_cent_per_kw_hour": 20.0,
+      "buyback_rate_cents_per_kwh": null,
+      "net_metering": null,
+      "device_gid": 1003,
+      "model": "VVDN01",
+      "firmware": "EVCharger-823",
+      "category": "EVSE",
+      "load_gid": 9001,
+      "evse_model": "Classic",
+      "evse_branding": "EMPORIA",
+      "evse_power_source": "NEMA",
+      "evse_color": "WHITE",
+      "evse_gun_type": "J1772",
+      "invite2charge_code": "ABCDEF",
+      "breaker_pin": "1234",
+      "primary_vehicle_brand": null,
+      "power_smart_monitor_device_id": null,
+      "power_smart_upgraded": false
+    },
+    {
+      "device_type": "MONITOR",
+      "device_id": "A2237A0000000000000002",
+      "energy_managements_configured": [],
+      "supported_energy_managements": [
+        "PEAK_DEMAND",
+        "POWER_SMART",
+        "EXCESS_SOLAR"
+      ],
+      "display_name": "Garage",
+      "site_gid": null,
+      "parent_device_id": "F2410A0000000000000001",
+      "parent_channel_id": "Mains",
+      "time_zone": "America/Denver",
+      "latitude": 39.7392,
+      "longitude": -104.9903,
+      "utility_rate_gid": null,
+      "utility_rate_mods": null,
+      "billing_cycle_start_day": 1,
+      "usage_cent_per_kw_hour": 20.0,
+      "buyback_rate_cents_per_kwh": null,
+      "net_metering": null,
+      "device_gid": 1002,
+      "model": "VUE002",
+      "firmware": "Vue2-823",
+      "category": "MONITOR",
+      "channels": [
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains",
+          "parent_channel_id": null,
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_A",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_B",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_C",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_1",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_2",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_3",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_4",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_5",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_6",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_7",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_8",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Branch_9",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": "Garage 3",
+          "multiplier": 1.0,
+          "channel_type_gid": 12,
+          "channel_id": "Branch_10",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Garage 2",
+          "multiplier": 1.0,
+          "channel_type_gid": 12,
+          "channel_id": "Branch_11",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Garage 1",
+          "multiplier": 1.0,
+          "channel_type_gid": 12,
+          "channel_id": "Branch_12",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 9,
+          "channel_id": "Branch_13",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": 9,
+          "channel_id": "Branch_14",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": false
+        },
+        {
+          "name": "Solar garage 1",
+          "multiplier": 1.0,
+          "channel_type_gid": 13,
+          "channel_id": "Branch_15",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Solar garage 2",
+          "multiplier": 1.0,
+          "channel_type_gid": 13,
+          "channel_id": "Branch_16",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        }
+      ],
+      "combined_vue": "NONE",
+      "primary_vue_device_id": null
+    },
+    {
+      "device_type": "MONITOR",
+      "device_id": "F2410A0000000000000001",
+      "energy_managements_configured": [
+        "EXCESS_SOLAR"
+      ],
+      "supported_energy_managements": [
+        "PEAK_DEMAND",
+        "POWER_SMART",
+        "EXCESS_SOLAR"
+      ],
+      "display_name": "Home",
+      "site_gid": null,
+      "parent_device_id": null,
+      "parent_channel_id": null,
+      "time_zone": "America/Denver",
+      "latitude": 39.7392,
+      "longitude": -104.9903,
+      "utility_rate_gid": null,
+      "utility_rate_mods": null,
+      "billing_cycle_start_day": 1,
+      "usage_cent_per_kw_hour": 20.0,
+      "buyback_rate_cents_per_kwh": null,
+      "net_metering": null,
+      "device_gid": 1001,
+      "model": "VUE003",
+      "firmware": "Vue3-823",
+      "category": "MONITOR",
+      "channels": [
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains",
+          "parent_channel_id": null,
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_A",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_B",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": true
+        },
+        {
+          "name": null,
+          "multiplier": 1.0,
+          "channel_type_gid": null,
+          "channel_id": "Mains_C",
+          "parent_channel_id": "Mains",
+          "channel_classification": "MAIN",
+          "has_data": false
+        },
+        {
+          "name": "Solar main 1",
+          "multiplier": 1.0,
+          "channel_type_gid": 13,
+          "channel_id": "Branch_1",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Solar main 2",
+          "multiplier": 1.0,
+          "channel_type_gid": 13,
+          "channel_id": "Branch_2",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Heat pump upper",
+          "multiplier": 2.0,
+          "channel_type_gid": 24,
+          "channel_id": "Branch_3",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Heat pump lower",
+          "multiplier": 2.0,
+          "channel_type_gid": 24,
+          "channel_id": "Branch_4",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Heat pump basement",
+          "multiplier": 2.0,
+          "channel_type_gid": 24,
+          "channel_id": "Branch_5",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Furnace upper",
+          "multiplier": 1.0,
+          "channel_type_gid": 11,
+          "channel_id": "Branch_6",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Furnace lower",
+          "multiplier": 1.0,
+          "channel_type_gid": 11,
+          "channel_id": "Branch_7",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Hot water tank",
+          "multiplier": 2.0,
+          "channel_type_gid": 22,
+          "channel_id": "Branch_8",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Kitchen counter",
+          "multiplier": 1.0,
+          "channel_type_gid": 16,
+          "channel_id": "Branch_9",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Microwave & USB",
+          "multiplier": 1.0,
+          "channel_type_gid": 17,
+          "channel_id": "Branch_10",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Refrigerator ",
+          "multiplier": 1.0,
+          "channel_type_gid": 10,
+          "channel_id": "Branch_11",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Freezer",
+          "multiplier": 1.0,
+          "channel_type_gid": 10,
+          "channel_id": "Branch_12",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Dishwasher",
+          "multiplier": 1.0,
+          "channel_type_gid": 8,
+          "channel_id": "Branch_13",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Oven",
+          "multiplier": 2.0,
+          "channel_type_gid": 7,
+          "channel_id": "Branch_14",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Dryer",
+          "multiplier": 2.0,
+          "channel_type_gid": 4,
+          "channel_id": "Branch_15",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        },
+        {
+          "name": "Server rack",
+          "multiplier": 1.0,
+          "channel_type_gid": 6,
+          "channel_id": "Branch_16",
+          "parent_channel_id": null,
+          "channel_classification": "FIFTY_AMP",
+          "has_data": true
+        }
+      ],
+      "combined_vue": "NONE",
+      "primary_vue_device_id": null
+    }
+  ]
+}

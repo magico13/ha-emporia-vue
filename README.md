@@ -45,6 +45,28 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 5. In the UI that opens, enter the email and password used for the Emporia App. If your account uses Google/Apple, see the [Google/Apple Accounts](#googleapple-accounts) section below.
 6. Done! You should now have a sensor for each "channel".
 
+### Features & Telemetry
+
+#### Device Hierarchy & Smart CT Pruning
+
+The integration organizes Emporia devices into their true physical electrical hierarchy:
+- **Two-Pass Hardware Hierarchy:** Child sub-panels (e.g. Garage Vue) and EV chargers automatically nest under their upstream electrical panel via Home Assistant's `via_device` relationship.
+- **CT Circuit Sub-Device Nesting:** Active branch CT circuits nest under their parent monitor with descriptive circuit model labels (e.g. `50A CT Circuit`, `200A CT Circuit`, `Merged CT Circuit`).
+- **Smart CT & Phase Pruning:** Unpopulated CT ports and unused 3-phase legs (e.g. `Mains C` on split-phase panels) are automatically detected via `has_data` and suppressed from entity creation, preventing empty dummy devices (resolving #379 and #328).
+
+#### Split-Phase & 3-Phase Voltage and Power
+
+The integration provides native line-level voltage and power sensors attached to the parent Vue monitor:
+- **Split-Phase Systems (North America):** Exposes `Mains A voltage`, `Mains B voltage`, `Mains A power`, and `Mains B power`, enabling leg balance monitoring and line-to-line voltage calculations (~120V / ~240V).
+- **3-Phase Systems (International / Commercial):** Exposes `Mains A`, `Mains B`, and `Mains C` voltage and power sensors for 230V/400V wye or delta installations.
+- **Merged Circuits:** User-configured combined circuits (e.g. `Merged_100`) cleanly nest under their parent monitor.
+
+#### EV Charger Controls
+
+Emporia EV Chargers (EVSE) feature modernized V1 controls:
+- **Controls:** Direct charging enable/disable switch and charging current limit slider (in Amps).
+- **Session Attributes:** Enriched attributes on `sensor.<charger>_charger_status` reporting session cost, active charging duration, vehicle plug-in timestamp, and pilot offered current.
+
 ### API Diagnostics
 
 The integration creates two diagnostic sensors for monitoring Emporia cloud
