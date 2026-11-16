@@ -1,9 +1,8 @@
 """Constants for the Emporia Vue integration."""
 
-import voluptuous as vol
-
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 
 DOMAIN = "emporia_vue"
 VUE_DATA = "vue_data"
@@ -21,6 +20,7 @@ ENABLE_1M = "enable_1m"
 ENABLE_1D = "enable_1d"
 ENABLE_1MON = "enable_1mon"
 SOLAR_INVERT = "solar_invert"
+SYNC_CIRCUIT_NAMES = "sync_circuit_names"
 CUSTOMER_GID = "customer_gid"
 CONFIG_TITLE = "title"
 
@@ -42,6 +42,7 @@ CONFIG_OPTIONS_SCHEMA = {
     vol.Optional(ENABLE_1D, default=True): cv.boolean,
     vol.Optional(ENABLE_1MON, default=True): cv.boolean,
     vol.Optional(SOLAR_INVERT, default=True): cv.boolean,
+    vol.Optional(SYNC_CIRCUIT_NAMES, default=True): cv.boolean,
 }
 
 CONFIG_FLOW_SCHEMA = vol.Schema(
