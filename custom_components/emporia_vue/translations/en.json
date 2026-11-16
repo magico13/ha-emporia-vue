@@ -40,7 +40,8 @@
                     "enable_1d": "Energy Today Sensor",
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 }
             },
             "user": {
@@ -55,7 +56,8 @@
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
                     "password": "Password",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 }
             },
             "tokens": {
@@ -66,22 +68,66 @@
                     "enable_1mon": "Energy This Month Sensor",
                     "id_token": "ID token",
                     "refresh_token": "Refresh token",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "sync_circuit_names": "Sync circuit names from Emporia app"
                 },
                 "description": "Use this for Emporia accounts created with Sign in with Google or another SSO provider. Paste the Emporia tokens for the account."
             }
         }
     },
+    "device": {
+        "circuit": {
+            "name": "{device_name} circuit {channel_number}"
+        }
+    },
     "entity": {
+        "button": {
+            "charge_at_full_power": {
+                "name": "Charge at full power"
+            }
+        },
         "number": {
             "charge_current_limit": {
-                "name": "Current Limit"
+                "name": "Current limit"
             }
         },
         "sensor": {
             "charger_status": {
-                "name": "Status"
+                "name": "Status",
+                "state_attributes": {
+                    "iec_status": {
+                        "name": "IEC status"
+                    }
+                }
+            },
+            "mains_voltage_minute_average": {
+                "name": "Mains {leg} voltage minute average"
+            },
+            "session_energy": {
+                "name": "Session energy"
+            },
+            "charging_current": {
+                "name": "Charging current"
+            },
+            "charging_power": {
+                "name": "Charging power"
+            },
+            "session_cost": {
+                "name": "Session cost"
+            },
+            "plug_in_time": {
+                "name": "Plug-in time"
             }
+        },
+        "switch": {
+            "excess_solar_load": {
+                "name": "Excess solar {load}"
+            }
+        }
+    },
+    "exceptions": {
+        "load_already_managed": {
+            "message": "{load} is already managed by {vue}. Turn off excess solar for {load} on {vue} first."
         }
     },
     "services": {
