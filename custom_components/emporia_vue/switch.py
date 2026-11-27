@@ -105,6 +105,7 @@ class EmporiaOutletSwitch(CoordinatorEntity, SwitchEntity):  # type: ignore
             name=self._device.device_name,
             model=self._device.model,
             sw_version=self._device.firmware,
+            serial_number=self._device.manufacturer_id,
             manufacturer="Emporia",
         )
 
